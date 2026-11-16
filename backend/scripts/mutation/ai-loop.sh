@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# PIT 변이 테스트 + AI 테스트 보강 자동 루프 (로컬 전용)
+# PIT 변이 테스트 + AI 테스트 보강 자동 루프 (로컬 + CI의 be-mutation-ai.yml)
 #
 # 사용법 (저장소 어디서든): backend/scripts/mutation/ai-loop.sh [최대회차=5]
 # 한 회차에 남은 변이가 많으면 앞에서부터 MAX_ITEMS(기본 30)개만 넘긴다.
+#
+# 환경 변수 (모두 선택)
+#   PIT_TARGETS   검사할 클래스 (changed-targets.sh 출력). 없으면 전체
+#   MUTATION_LOG  회차 기록 파일 (기본 scripts/mutation/mutation-log.txt, CI는 /dev/null)
+#   RUN_DIR       회차별 결과 폴더 (기본 build/mutation-runs/<시각>)
+#   CLAUDE_BIN    claude 실행 파일 경로
 #
 # 한 회차 = pitest 측정 → 남은 변이(생존+미실행)를 claude에게 전달 → 테스트 추가 → 안전 검사
 # 멈추는 경우: 남은 변이 0 / 직전 회차보다 줄지 않음 / 운영 코드가 바뀜 / AI가 쓴 테스트 실패 / 최대 회차
@@ -12,11 +18,11 @@ MAX_ROUNDS="${1:-5}"
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 BACKEND="$REPO_ROOT/backend"
 DIR="$BACKEND/scripts/mutation"
-LOG="$DIR/mutation-log.txt"
+LOG="${MUTATION_LOG:-$DIR/mutation-log.txt}"
 REPORT="$DIR/PitReport.java"
 XML="$BACKEND/build/reports/pitest/mutations.xml"
 CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
-RUN_DIR="$DIR/runs/$(date +%Y%m%d-%H%M%S)"
+RUN_DIR="${RUN_DIR:-$BACKEND/build/mutation-runs/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$RUN_DIR"
 
 # 운영 코드와 PIT 설정의 지문. AI 실행 전후로 비교해서 하나라도 바뀌면 즉시 중단한다.
@@ -26,10 +32,12 @@ fingerprint() {
 }
 
 measure() {
-  (cd "$BACKEND" && ./gradlew pitest -q >"$RUN_DIR/pitest-$1.log" 2>&1)
+  local args=(pitest -q)
+  [[ -n "${PIT_TARGETS:-}" ]] && args+=("-PpitTargets=$PIT_TARGETS")
+  (cd "$BACKEND" && ./gradlew "${args[@]}" >"$RUN_DIR/pitest-$1.log" 2>&1)
 }
 
-last_round=$(awk -F'\t' '$1 ~ /^[0-9]+$/ {n=$1} END {print n+0}' "$LOG")
+last_round=$(awk -F'\t' '$1 ~ /^[0-9]+$/ {n=$1} END {print n+0}' "$LOG" 2>/dev/null || echo 0)
 prev_left=""
 
 for ((i = 1; i <= MAX_ROUNDS; i++)); do
@@ -64,7 +72,7 @@ $(cat "$RUN_DIR/todo-$round.txt")
 3. 기존 테스트 스타일(@DisplayName 한국어, AssertJ)을 따른다.
 4. "메서드가 호출됐는지"보다 바깥에서 보이는 행동(반환값, 예외와 에러 코드, 저장·조회 여부)을 확인한다. 구현 코드를 그대로 베끼는 테스트는 쓰지 않는다.
 5. 코드를 바꿔도 동작이 같아 어떤 테스트로도 잡을 수 없는 동등 변이라고 판단되면 테스트를 쓰지 말고 backend/scripts/mutation/equivalent.md 표에 한 줄 추가한다. "사람 판정" 칸은 비워 둔다.
-6. 테스트를 다 쓴 뒤 backend 에서 ./gradlew test --tests '<추가한 테스트 클래스>' 로 실행한다. 실패하면 테스트를 운영 코드에 맞추지 말고, 왜 실패했는지와 실제 버그일 가능성을 마지막 답변에 적는다.
+6. 테스트를 다 쓴 뒤 backend 에서 ./gradlew test -PexcludeIntegration --tests '<추가한 테스트 클래스>' 로 실행한다. 실패하면 테스트를 운영 코드에 맞추지 말고, 왜 실패했는지와 실제 버그일 가능성을 마지막 답변에 적는다.
 7. 마지막 답변은 한국어로: 추가한 테스트 목록, 각 테스트가 노린 변이, 동등 변이로 판단한 것, 실패한 테스트.
 EOF
 )

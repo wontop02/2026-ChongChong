@@ -1,0 +1,173 @@
+name: Backend Mutation AI
+
+# PR에 `mutation-fix` 라벨을 붙이면 Claude가 이 PR에서 바뀐 클래스의 단위 테스트를 보강해서 같은 PR에 커밋한다.
+# - 테스트(backend/src/test)와 equivalent.md만 바꿀 수 있다. 다른 파일이 바뀌면 커밋하지 않는다.
+# - AI가 쓴 테스트가 실패하면(버그 후보) 커밋하지 않고 댓글로 알린다.
+# - 끝나면 라벨을 떼므로, 다시 붙이면 다시 실행된다.
+# - 필요한 시크릿: ANTHROPIC_API_KEY
+on:
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # 보강한 테스트를 PR 브랜치에 커밋
+  pull-requests: write # 결과 댓글, 라벨 떼기
+
+jobs:
+  reinforce:
+    name: AI test reinforcement
+    # fork에서 온 PR은 시크릿·쓰기 권한이 없으므로 돌리지 않는다.
+    if: github.event.label.name == 'mutation-fix' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0 # 기준 브랜치와 비교해서 바뀐 클래스를 찾기 위해
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Find changed classes
+        id: targets
+        run: |
+          targets="$(scripts/mutation/changed-targets.sh "origin/$BASE_REF")"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          [ -n "$targets" ] || echo "skip=true" >> "$GITHUB_OUTPUT"
+
+      - name: Measure before
+        if: steps.targets.outputs.skip != 'true'
+        id: before
+        env:
+          PIT_TARGETS: ${{ steps.targets.outputs.targets }}
+        run: |
+          ./gradlew pitest -q -PpitTargets="$PIT_TARGETS"
+          echo "score=$(java scripts/mutation/PitReport.java score | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Run AI loop
+        if: steps.targets.outputs.skip != 'true'
+        id: loop
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PIT_TARGETS: ${{ steps.targets.outputs.targets }}
+          MUTATION_LOG: /dev/null
+          RUN_DIR: ${{ runner.temp }}/ai-loop
+          CLAUDE_BIN: claude
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY 시크릿이 없습니다."
+            echo "exit=nokey" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          set +e
+          scripts/mutation/ai-loop.sh 3 | tee "$RUNNER_TEMP/ai-loop.log"
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          echo "score=$(java scripts/mutation/PitReport.java score | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      # 테스트·equivalent.md 밖의 파일이 바뀌었으면 커밋하지 않는다. (ai-loop.sh의 운영 코드 지문 검사에 더한 이중 확인)
+      - name: Check changed files
+        if: steps.targets.outputs.skip != 'true'
+        id: changes
+        run: |
+          changed="$(git status --porcelain --untracked-files=all | cut -c4-)"
+          outside="$(echo "$changed" | grep -v -e '^backend/src/test/' -e '^backend/scripts/mutation/equivalent.md$' | grep -v '^$' || true)"
+          if [ -n "$outside" ]; then
+            echo "status=outside" >> "$GITHUB_OUTPUT"
+            echo "허용되지 않은 파일이 바뀌었습니다:"; echo "$outside"
+          elif [ -z "$changed" ]; then
+            echo "status=none" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push
+        if: steps.loop.outputs.exit == '0' && steps.changes.outputs.status == 'ok'
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/src/test backend/scripts/mutation/equivalent.md
+          git commit -m "[test] 변이 테스트 보강 (AI)" -m "변이 점수 ${{ steps.before.outputs.score }} → ${{ steps.loop.outputs.score }}"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build comment
+        if: always()
+        run: |
+          out="$RUNNER_TEMP/ai-comment.md"
+          {
+            echo "## 🤖 AI 테스트 보강 결과"
+            echo
+            if [ "${{ steps.targets.outputs.skip }}" = "true" ]; then
+              echo "이번 PR에서 바뀐 검사 대상 클래스가 없어 실행하지 않았습니다."
+            else
+              echo "| 보강 전 | 보강 후 | 결과 |"
+              echo "|---|---|---|"
+              if [ -n "${{ steps.commit.outputs.sha }}" ]; then
+                result="✅ 커밋 \`${{ steps.commit.outputs.sha }}\` 추가 — 리뷰 후 마음에 안 들면 이 커밋만 되돌리세요. 이어서 작업하기 전에 \`git pull\`"
+              elif [ "${{ steps.loop.outputs.exit }}" = "nokey" ]; then
+                result="⛔ 저장소 시크릿 \`ANTHROPIC_API_KEY\`가 없어 실행하지 않음"
+              elif [ "${{ steps.changes.outputs.status }}" = "outside" ]; then
+                result="⛔ 테스트 밖의 파일이 바뀌어서 커밋하지 않음"
+              elif [ "${{ steps.loop.outputs.exit }}" != "0" ]; then
+                result="⚠️ 중단 — AI가 쓴 테스트가 실패했거나 운영 코드가 바뀜. **실제 버그 후보**일 수 있으니 아래 내용을 확인하세요 (커밋 안 함)"
+              elif [ "${{ steps.changes.outputs.status }}" = "none" ]; then
+                result="바뀐 테스트 없음"
+              else
+                result="❌ 실행 실패 — Actions 로그 확인"
+              fi
+              echo "| ${{ steps.before.outputs.score }} | ${{ steps.loop.outputs.score }} | $result |"
+              echo
+              echo "<details><summary>AI 답변 (추가한 테스트, 동등 변이 판단, 실패한 테스트)</summary>"
+              echo
+              for f in "$RUNNER_TEMP"/ai-loop/claude-*.md; do
+                [ -f "$f" ] || continue
+                echo "#### $(basename "$f" .md)"
+                head -c 15000 "$f"
+                echo
+              done
+              echo
+              echo "</details>"
+            fi
+          } > "$out"
+          cat "$out" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        if: always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: mutation-ai
+          path: ${{ runner.temp }}/ai-comment.md
+
+      - name: Remove label
+        if: always()
+        run: gh pr edit "$PR_NUMBER" --repo "${{ github.repository }}" --remove-label mutation-fix
+
+      - name: Upload AI loop logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-mutation-ai-logs
+          path: ${{ runner.temp }}/ai-loop/
+          retention-days: 7
