@@ -48,7 +48,10 @@ jobs:
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
         with:
-          cache-read-only: true
+          # PR 실행도 Gradle 캐시를 저장한다. 저장하지 않으면 캐시가 없는 저장소(예: 개인 fork)에서는
+          # 매번 의존성을 전부 내려받다가 Maven Central이 429(Too Many Requests)로 막는다.
+          # PR에서 저장한 캐시는 그 PR 실행에서만 다시 쓰이므로 다른 브랜치를 오염시키지 않는다.
+          cache-read-only: false
       - name: Install Codex
         run: npm install -g @openai/codex
 
