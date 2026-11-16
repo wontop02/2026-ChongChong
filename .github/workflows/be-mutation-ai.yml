@@ -1,10 +1,12 @@
 name: Backend Mutation AI
 
-# PR에 `mutation-fix` 라벨을 붙이면 Claude가 이 PR에서 바뀐 클래스의 단위 테스트를 보강해서 같은 PR에 커밋한다.
+# PR에 `mutation-fix` 라벨을 붙이면 AI가 이 PR에서 바뀐 클래스의 단위 테스트를 보강해서 같은 PR에 커밋한다.
 # - 테스트(backend/src/test)와 equivalent.md만 바꿀 수 있다. 다른 파일이 바뀌면 커밋하지 않는다.
 # - AI가 쓴 테스트가 실패하면(버그 후보) 커밋하지 않고 댓글로 알린다.
 # - 끝나면 라벨을 떼므로, 다시 붙이면 다시 실행된다.
-# - 필요한 시크릿: ANTHROPIC_API_KEY
+# - AI: 지금은 Codex(ChatGPT 로그인). 필요한 시크릿: CODEX_AUTH_JSON (~/.codex/auth.json 내용)
+#   Claude로 바꾸려면 AI_AGENT를 claude로, 시크릿을 ANTHROPIC_API_KEY로 바꾼다.
+# - AI가 직접 push하지 못하게, 체크아웃할 때 인증 정보를 남기지 않고 커밋 단계에서만 토큰을 쓴다.
 on:
   pull_request:
     types: [labeled]
@@ -28,7 +30,7 @@ jobs:
       run:
         working-directory: backend
     env:
-      GH_TOKEN: ${{ github.token }}
+      # GH_TOKEN은 AI 단계에 보이지 않도록 job 전체가 아니라 필요한 단계에만 준다.
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
@@ -37,6 +39,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0 # 기준 브랜치와 비교해서 바뀐 클래스를 찾기 위해
+          persist-credentials: false # AI 실행 중에는 push 권한이 없도록
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
@@ -46,8 +49,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: true
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+      - name: Install Codex
+        run: npm install -g @openai/codex
 
       - name: Find changed classes
         id: targets
@@ -69,17 +72,23 @@ jobs:
         if: steps.targets.outputs.skip != 'true'
         id: loop
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          AI_AGENT: codex
+          # 러너는 이번 실행이 끝나면 버려지는 일회용 VM이고, 리눅스 러너에서는 codex 샌드박스가 동작하지 않는 경우가 있어 끈다.
+          # 대신 push 권한을 빼 두고, 아래 단계에서 바뀐 파일과 커밋을 검사한다.
+          CODEX_SANDBOX: danger-full-access
           PIT_TARGETS: ${{ steps.targets.outputs.targets }}
           MUTATION_LOG: /dev/null
           RUN_DIR: ${{ runner.temp }}/ai-loop
-          CLAUDE_BIN: claude
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "ANTHROPIC_API_KEY 시크릿이 없습니다."
+          if [ -z "$CODEX_AUTH_JSON" ]; then
+            echo "CODEX_AUTH_JSON 시크릿이 없습니다."
             echo "exit=nokey" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          mkdir -p ~/.codex && printf '%s' "$CODEX_AUTH_JSON" > ~/.codex/auth.json && chmod 600 ~/.codex/auth.json
+          unset CODEX_AUTH_JSON
+          git rev-parse HEAD > "$RUNNER_TEMP/head-before"
           set +e
           scripts/mutation/ai-loop.sh 3 | tee "$RUNNER_TEMP/ai-loop.log"
           echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
@@ -90,6 +99,11 @@ jobs:
         if: steps.targets.outputs.skip != 'true'
         id: changes
         run: |
+          if [ "$(git rev-parse HEAD)" != "$(cat "$RUNNER_TEMP/head-before" 2>/dev/null)" ]; then
+            echo "status=outside" >> "$GITHUB_OUTPUT"
+            echo "AI가 직접 커밋을 만들었습니다. 커밋하지 않습니다."
+            exit 0
+          fi
           changed="$(git status --porcelain --untracked-files=all | cut -c4-)"
           outside="$(echo "$changed" | grep -v -e '^backend/src/test/' -e '^backend/scripts/mutation/equivalent.md$' | grep -v '^$' || true)"
           if [ -n "$outside" ]; then
@@ -104,12 +118,14 @@ jobs:
       - name: Commit and push
         if: steps.loop.outputs.exit == '0' && steps.changes.outputs.status == 'ok'
         id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add backend/src/test backend/scripts/mutation/equivalent.md
           git commit -m "[test] 변이 테스트 보강 (AI)" -m "변이 점수 ${{ steps.before.outputs.score }} → ${{ steps.loop.outputs.score }}"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build comment
@@ -127,9 +143,9 @@ jobs:
               if [ -n "${{ steps.commit.outputs.sha }}" ]; then
                 result="✅ 커밋 \`${{ steps.commit.outputs.sha }}\` 추가 — 리뷰 후 마음에 안 들면 이 커밋만 되돌리세요. 이어서 작업하기 전에 \`git pull\`"
               elif [ "${{ steps.loop.outputs.exit }}" = "nokey" ]; then
-                result="⛔ 저장소 시크릿 \`ANTHROPIC_API_KEY\`가 없어 실행하지 않음"
+                result="⛔ 저장소 시크릿 \`CODEX_AUTH_JSON\`이 없어 실행하지 않음"
               elif [ "${{ steps.changes.outputs.status }}" = "outside" ]; then
-                result="⛔ 테스트 밖의 파일이 바뀌어서 커밋하지 않음"
+                result="⛔ 테스트 밖의 파일이 바뀌었거나 AI가 직접 커밋해서 커밋하지 않음"
               elif [ "${{ steps.loop.outputs.exit }}" != "0" ]; then
                 result="⚠️ 중단 — AI가 쓴 테스트가 실패했거나 운영 코드가 바뀜. **실제 버그 후보**일 수 있으니 아래 내용을 확인하세요 (커밋 안 함)"
               elif [ "${{ steps.changes.outputs.status }}" = "none" ]; then
@@ -141,7 +157,7 @@ jobs:
               echo
               echo "<details><summary>AI 답변 (추가한 테스트, 동등 변이 판단, 실패한 테스트)</summary>"
               echo
-              for f in "$RUNNER_TEMP"/ai-loop/claude-*.md; do
+              for f in "$RUNNER_TEMP"/ai-loop/ai-*.md; do
                 [ -f "$f" ] || continue
                 echo "#### $(basename "$f" .md)"
                 head -c 15000 "$f"
@@ -162,7 +178,13 @@ jobs:
 
       - name: Remove label
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: gh pr edit "$PR_NUMBER" --repo "${{ github.repository }}" --remove-label mutation-fix
+
+      - name: Remove Codex login
+        if: always()
+        run: rm -f ~/.codex/auth.json
 
       - name: Upload AI loop logs
         if: always()

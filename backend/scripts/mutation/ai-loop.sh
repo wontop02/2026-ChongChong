@@ -8,9 +8,12 @@
 #   PIT_TARGETS   검사할 클래스 (changed-targets.sh 출력). 없으면 전체
 #   MUTATION_LOG  회차 기록 파일 (기본 scripts/mutation/mutation-log.txt, CI는 /dev/null)
 #   RUN_DIR       회차별 결과 폴더 (기본 build/mutation-runs/<시각>)
+#   AI_AGENT      claude(기본) | codex
 #   CLAUDE_BIN    claude 실행 파일 경로
+#   CODEX_BIN     codex 실행 파일 경로
+#   CODEX_SANDBOX codex 샌드박스 (기본 workspace-write, CI는 러너 자체가 일회용이라 danger-full-access)
 #
-# 한 회차 = pitest 측정 → 남은 변이(생존+미실행)를 claude에게 전달 → 테스트 추가 → 안전 검사
+# 한 회차 = pitest 측정 → 남은 변이(생존+미실행)를 AI(claude 또는 codex)에게 전달 → 테스트 추가 → 안전 검사
 # 멈추는 경우: 남은 변이 0 / 직전 회차보다 줄지 않음 / 운영 코드가 바뀜 / AI가 쓴 테스트 실패 / 최대 회차
 set -euo pipefail
 
@@ -21,7 +24,9 @@ DIR="$BACKEND/scripts/mutation"
 LOG="${MUTATION_LOG:-$DIR/mutation-log.txt}"
 REPORT="$DIR/PitReport.java"
 XML="$BACKEND/build/reports/pitest/mutations.xml"
+AI_AGENT="${AI_AGENT:-claude}"
 CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
+CODEX_BIN="${CODEX_BIN:-codex}"
 RUN_DIR="${RUN_DIR:-$BACKEND/build/mutation-runs/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$RUN_DIR"
 
@@ -29,6 +34,41 @@ mkdir -p "$RUN_DIR"
 fingerprint() {
   (cd "$REPO_ROOT" && find backend/src/main -type f -print0 | sort -z | xargs -0 shasum
    shasum backend/build.gradle) | shasum | cut -d' ' -f1
+}
+
+# AI에게 프롬프트를 주고 마지막 답변을 $2에, 전체 로그를 $3에 남긴다.
+run_agent() {
+  local prompt="$1" answer="$2" log="$3"
+  case "$AI_AGENT" in
+    claude)
+      (cd "$REPO_ROOT" && "$CLAUDE_BIN" -p "$prompt" \
+          --model sonnet \
+          --max-turns 20 \
+          --allowedTools "Read" "Glob" "Grep" \
+            "Edit(/backend/src/test/**)" "Write(/backend/src/test/**)" \
+            "Edit(/backend/scripts/mutation/equivalent.md)" \
+            "Bash(cd backend)" "Bash(./gradlew test *)" \
+          >"$answer" 2>"$log")
+      ;;
+    codex)
+      # 도구 제한이 claude만큼 세밀하지 않으므로, 운영 코드 지문 검사와 CI의 변경 파일 검사가 안전장치다.
+      local sandbox_args=(--sandbox "${CODEX_SANDBOX:-workspace-write}")
+      if [[ "${CODEX_SANDBOX:-}" == "danger-full-access" ]]; then
+        sandbox_args=(--dangerously-bypass-approvals-and-sandbox)
+      fi
+      "$CODEX_BIN" exec "${sandbox_args[@]}" \
+          -c sandbox_workspace_write.network_access=true \
+          --add-dir "$HOME/.gradle" \
+          --ephemeral \
+          -C "$REPO_ROOT" \
+          -o "$answer" \
+          "$prompt" >"$log" 2>&1
+      ;;
+    *)
+      echo "알 수 없는 AI_AGENT: $AI_AGENT (claude | codex)" >&2
+      return 2
+      ;;
+  esac
 }
 
 measure() {
@@ -76,15 +116,9 @@ $(cat "$RUN_DIR/todo-$round.txt")
 7. 마지막 답변은 한국어로: 추가한 테스트 목록, 각 테스트가 노린 변이, 동등 변이로 판단한 것, 실패한 테스트.
 EOF
 )
-  echo "=== 회차 $round: claude 실행 ==="
-  (cd "$REPO_ROOT" && "$CLAUDE_BIN" -p "$prompt" \
-      --model sonnet \
-      --max-turns 20 \
-      --allowedTools "Read" "Glob" "Grep" \
-        "Edit(/backend/src/test/**)" "Write(/backend/src/test/**)" \
-        "Edit(/backend/scripts/mutation/equivalent.md)" \
-        "Bash(cd backend)" "Bash(./gradlew test *)" \
-      >"$RUN_DIR/claude-$round.md" 2>&1) || echo "(claude 종료 코드 $? — 내용은 $RUN_DIR/claude-$round.md 확인)"
+  echo "=== 회차 $round: $AI_AGENT 실행 ==="
+  run_agent "$prompt" "$RUN_DIR/ai-$round.md" "$RUN_DIR/agent-$round.log" \
+    || echo "($AI_AGENT 종료 코드 $? — 내용은 $RUN_DIR/agent-$round.log 확인)"
 
   if [[ "$(fingerprint)" != "$before" ]]; then
     printf '%s\t자동\t-\t-\t-\t중단: 운영 코드 또는 build.gradle이 바뀜\n' "$round" >>"$LOG"
@@ -96,12 +130,12 @@ EOF
   # PIT와 같은 기준: integration 태그를 뺀 단위 테스트 전체
   if ! (cd "$BACKEND" && ./gradlew test -q -PexcludeIntegration >"$RUN_DIR/test-$round.log" 2>&1); then
     printf '%s\t자동\t-\t-\t-\t중단: 테스트 실패 (버그 후보 확인 필요)\n' "$round" >>"$LOG"
-    echo "!!! 테스트가 실패했습니다. 실제 버그 후보일 수 있습니다: $RUN_DIR/test-$round.log, $RUN_DIR/claude-$round.md"
+    echo "!!! 테스트가 실패했습니다. 실제 버그 후보일 수 있습니다: $RUN_DIR/test-$round.log, $RUN_DIR/ai-$round.md"
     exit 1
   fi
 
   measure "$round-after"
-  printf '%s\t자동(sonnet)\t%s\t%s\n' "$round" "$(java "$REPORT" score "$XML")" "결과: $RUN_DIR/claude-$round.md" >>"$LOG"
+  printf '%s\t자동(%s)\t%s\t%s\n' "$round" "$AI_AGENT" "$(java "$REPORT" score "$XML")" "결과: $RUN_DIR/ai-$round.md" >>"$LOG"
   tail -1 "$LOG"
 done
 

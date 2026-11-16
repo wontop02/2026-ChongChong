@@ -5,7 +5,7 @@
 #   로컬: ./gradlew pitest -PpitTargets="$(scripts/mutation/changed-targets.sh origin/dev)"
 #
 # - src/main에서 바뀐 클래스
-# - src/test에서 바뀐 FooTest.java 의 짝인 Foo (테스트만 보강한 PR도 점수가 나오게)
+# - src/test에서 바뀐 FooTest.java·FooUnitTest.java 의 짝인 Foo (테스트만 보강한 PR도 점수가 나오게)
 # - 컨트롤러·설정·리포지토리·부트스트랩은 build.gradle의 excludedClasses와 같이 뺀다.
 set -euo pipefail
 
@@ -18,7 +18,7 @@ test="backend/src/test/java"
 {
     git -C "$root" diff --name-only --diff-filter=AMR "$from" -- "$main" | grep '\.java$' || true
     git -C "$root" diff --name-only --diff-filter=AMR "$from" -- "$test" | grep 'Test\.java$' \
-        | sed -E "s#^$test/(.*)Test\.java\$#$main/\1.java#" || true
+        | sed -E -e "s#^$test/(.*)UnitTest\.java\$#$main/\1.java#" -e "s#^$test/(.*)Test\.java\$#$main/\1.java#" || true
 } | sort -u | while read -r file; do
     [ -f "$root/$file" ] || continue
     cls="${file#"$main"/}"
