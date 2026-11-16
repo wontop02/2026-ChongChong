@@ -8,13 +8,16 @@
 #   PIT_TARGETS   검사할 클래스 (changed-targets.sh 출력). 없으면 전체
 #   MUTATION_LOG  회차 기록 파일 (기본 scripts/mutation/mutation-log.txt, CI는 /dev/null)
 #   RUN_DIR       회차별 결과 폴더 (기본 build/mutation-runs/<시각>)
+#   MIN_SCORE     이 변이 점수(%) 이상이면 멈춤 (기본 80)
 #   AI_AGENT      claude(기본) | codex
+#   CODEX_MODEL   codex 모델 (없으면 ~/.codex/config.toml 설정)
+#   CODEX_EFFORT  codex 추론 강도 (low | medium | high | xhigh | max, 없으면 설정값)
 #   CLAUDE_BIN    claude 실행 파일 경로
 #   CODEX_BIN     codex 실행 파일 경로
 #   CODEX_SANDBOX codex 샌드박스 (기본 workspace-write, CI는 러너 자체가 일회용이라 danger-full-access)
 #
 # 한 회차 = pitest 측정 → 남은 변이(생존+미실행)를 AI(claude 또는 codex)에게 전달 → 테스트 추가 → 안전 검사
-# 멈추는 경우: 남은 변이 0 / 직전 회차보다 줄지 않음 / 운영 코드가 바뀜 / AI가 쓴 테스트 실패 / 최대 회차
+# 멈추는 경우: 변이 점수가 MIN_SCORE 이상 / 남은 변이 0 / 직전 회차보다 줄지 않음 / 운영 코드가 바뀜 / AI가 쓴 테스트 실패 / 최대 회차
 set -euo pipefail
 
 MAX_ROUNDS="${1:-5}"
@@ -24,6 +27,7 @@ DIR="$BACKEND/scripts/mutation"
 LOG="${MUTATION_LOG:-$DIR/mutation-log.txt}"
 REPORT="$DIR/PitReport.java"
 XML="$BACKEND/build/reports/pitest/mutations.xml"
+MIN_SCORE="${MIN_SCORE:-80}"
 AI_AGENT="${AI_AGENT:-claude}"
 CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
 CODEX_BIN="${CODEX_BIN:-codex}"
@@ -56,13 +60,16 @@ run_agent() {
       if [[ "${CODEX_SANDBOX:-}" == "danger-full-access" ]]; then
         sandbox_args=(--dangerously-bypass-approvals-and-sandbox)
       fi
-      "$CODEX_BIN" exec "${sandbox_args[@]}" \
+      local model_args=()
+      [[ -n "${CODEX_MODEL:-}" ]] && model_args+=(-m "$CODEX_MODEL")
+      [[ -n "${CODEX_EFFORT:-}" ]] && model_args+=(-c "model_reasoning_effort=\"$CODEX_EFFORT\"")
+      "$CODEX_BIN" exec "${sandbox_args[@]}" "${model_args[@]}" \
           -c sandbox_workspace_write.network_access=true \
           --add-dir "$HOME/.gradle" \
           --ephemeral \
           -C "$REPO_ROOT" \
           -o "$answer" \
-          "$prompt" >"$log" 2>&1
+          "$prompt" </dev/null >"$log" 2>&1
       ;;
     *)
       echo "알 수 없는 AI_AGENT: $AI_AGENT (claude | codex)" >&2
@@ -88,6 +95,13 @@ for ((i = 1; i <= MAX_ROUNDS; i++)); do
   head -n "${MAX_ITEMS:-30}" "$RUN_DIR/todo-all-$round.txt" >"$RUN_DIR/todo-$round.txt"
   left=$(wc -l <"$RUN_DIR/todo-all-$round.txt" | tr -d ' ')
   echo "남은 변이: $left개"
+
+  read -r detected total < <(java "$REPORT" score "$XML" | sed -E 's/^[^(]*\(([0-9]+)\/([0-9]+)\).*/\1 \2/')
+  echo "변이 점수: $detected/$total (기준 ${MIN_SCORE}%)"
+  if [[ "$total" -gt 0 && $((detected * 100)) -ge $((MIN_SCORE * total)) ]]; then
+    echo "기준 달성. 종료."
+    break
+  fi
 
   if [[ "$left" -eq 0 ]]; then
     echo "남은 변이 없음. 종료."

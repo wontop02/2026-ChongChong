@@ -32,6 +32,7 @@ jobs:
     env:
       # GH_TOKEN은 AI 단계에 보이지 않도록 job 전체가 아니라 필요한 단계에만 준다.
       PR_NUMBER: ${{ github.event.pull_request.number }}
+      MIN_SCORE: "80" # 변이 점수가 이 값(%) 이상이면 AI를 부르지 않거나 반복을 멈춘다
       BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
       - name: Checkout PR branch
@@ -66,14 +67,21 @@ jobs:
           PIT_TARGETS: ${{ steps.targets.outputs.targets }}
         run: |
           ./gradlew pitest -q -PpitTargets="$PIT_TARGETS"
-          echo "score=$(java scripts/mutation/PitReport.java score | cut -f1)" >> "$GITHUB_OUTPUT"
+          line="$(java scripts/mutation/PitReport.java score)"
+          echo "score=$(echo "$line" | cut -f1)" >> "$GITHUB_OUTPUT"
+          read -r detected total < <(echo "$line" | sed -E 's/^[^(]*\(([0-9]+)\/([0-9]+)\).*/\1 \2/')
+          if [ "$total" -gt 0 ] && [ $((detected * 100)) -ge $((MIN_SCORE * total)) ]; then
+            echo "pass=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run AI loop
-        if: steps.targets.outputs.skip != 'true'
+        if: steps.targets.outputs.skip != 'true' && steps.before.outputs.pass != 'true'
         id: loop
         env:
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
           AI_AGENT: codex
+          CODEX_MODEL: gpt-6.1-sol # 로컬 ~/.codex/config.toml과 같은 모델
+          CODEX_EFFORT: high # 로컬은 max. CI는 시간·사용량을 줄이려고 한 단계 낮춤
           # 러너는 이번 실행이 끝나면 버려지는 일회용 VM이고, 리눅스 러너에서는 codex 샌드박스가 동작하지 않는 경우가 있어 끈다.
           # 대신 push 권한을 빼 두고, 아래 단계에서 바뀐 파일과 커밋을 검사한다.
           CODEX_SANDBOX: danger-full-access
@@ -96,7 +104,7 @@ jobs:
 
       # 테스트·equivalent.md 밖의 파일이 바뀌었으면 커밋하지 않는다. (ai-loop.sh의 운영 코드 지문 검사에 더한 이중 확인)
       - name: Check changed files
-        if: steps.targets.outputs.skip != 'true'
+        if: steps.targets.outputs.skip != 'true' && steps.before.outputs.pass != 'true'
         id: changes
         run: |
           if [ "$(git rev-parse HEAD)" != "$(cat "$RUNNER_TEMP/head-before" 2>/dev/null)" ]; then
@@ -123,7 +131,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/src/test backend/scripts/mutation/equivalent.md
+          git add -- src/test scripts/mutation/equivalent.md # 이 단계는 backend 폴더에서 실행된다
           git commit -m "[test] 변이 테스트 보강 (AI)" -m "변이 점수 ${{ steps.before.outputs.score }} → ${{ steps.loop.outputs.score }}"
           git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
@@ -138,9 +146,13 @@ jobs:
             if [ "${{ steps.targets.outputs.skip }}" = "true" ]; then
               echo "이번 PR에서 바뀐 검사 대상 클래스가 없어 실행하지 않았습니다."
             else
+              echo "기준: 이번 PR에서 바뀐 클래스의 변이 점수 ${MIN_SCORE}% 이상"
+              echo
               echo "| 보강 전 | 보강 후 | 결과 |"
               echo "|---|---|---|"
-              if [ -n "${{ steps.commit.outputs.sha }}" ]; then
+              if [ "${{ steps.before.outputs.pass }}" = "true" ]; then
+                result="✅ 이미 기준(${MIN_SCORE}%) 이상이라 AI를 실행하지 않음"
+              elif [ -n "${{ steps.commit.outputs.sha }}" ]; then
                 result="✅ 커밋 \`${{ steps.commit.outputs.sha }}\` 추가 — 리뷰 후 마음에 안 들면 이 커밋만 되돌리세요. 이어서 작업하기 전에 \`git pull\`"
               elif [ "${{ steps.loop.outputs.exit }}" = "nokey" ]; then
                 result="⛔ 저장소 시크릿 \`CODEX_AUTH_JSON\`이 없어 실행하지 않음"
@@ -153,7 +165,7 @@ jobs:
               else
                 result="❌ 실행 실패 — Actions 로그 확인"
               fi
-              echo "| ${{ steps.before.outputs.score }} | ${{ steps.loop.outputs.score }} | $result |"
+              echo "| ${{ steps.before.outputs.score }} | ${{ steps.loop.outputs.score || steps.before.outputs.score }} | $result |"
               echo
               echo "<details><summary>AI 답변 (추가한 테스트, 동등 변이 판단, 실패한 테스트)</summary>"
               echo
