@@ -8,6 +8,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +36,7 @@ import withoutc.chongchong.support.TestDatabaseCleaner;
         "spring.jpa.hibernate.ddl-auto=validate"
 })
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@Tag("integration")
 class NotificationDeliveryPostgresRepositoryTest extends NotificationDeliveryRepositoryContractTest {
 
     @Autowired

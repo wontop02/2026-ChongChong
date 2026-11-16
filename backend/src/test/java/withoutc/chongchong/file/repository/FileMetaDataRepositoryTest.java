@@ -6,6 +6,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -18,6 +19,7 @@ import withoutc.chongchong.user.repository.UserRepository;
 @SpringBootTest
 @ActiveProfiles("test")
 @Transactional
+@Tag("integration")
 class FileMetaDataRepositoryTest {
 
     @Autowired

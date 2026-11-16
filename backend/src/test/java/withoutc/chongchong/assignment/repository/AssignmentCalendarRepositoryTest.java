@@ -7,6 +7,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -29,6 +30,7 @@ import withoutc.chongchong.user.repository.UserRepository;
 @SpringBootTest
 @ActiveProfiles("test")
 @Transactional
+@Tag("integration")
 class AssignmentCalendarRepositoryTest {
 
     private static final LocalDateTime START = LocalDateTime.of(2024, 2, 1, 0, 0);

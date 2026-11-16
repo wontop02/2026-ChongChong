@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '4.1.0'
     id 'io.spring.dependency-management' version '1.1.7'
+    id 'info.solidsoft.pitest' version '1.19.0'
 }
 
 group = 'withoutc'
@@ -64,6 +65,10 @@ tasks.withType(Test).configureEach {
 tasks.named('test') {
     useJUnitPlatform {
         excludeTags 'openapi-coverage'
+        // 변이 테스트 보강 루프용: ./gradlew test -PexcludeIntegration 으로 단위 테스트만 실행
+        if (providers.gradleProperty('excludeIntegration').isPresent()) {
+            excludeTags 'integration'
+        }
     }
     systemProperty 'openapi.spec.path', layout.projectDirectory.file('docs/openapi/openapi.yaml').asFile.absolutePath
     systemProperty 'openapi.coverage.path', layout.buildDirectory.file('openapi/covered-operations.txt').get().asFile.absolutePath
@@ -76,6 +81,30 @@ tasks.named('test') {
         delete layout.buildDirectory.file('openapi/covered-operations.txt')
     }
     finalizedBy 'verifyOpenApiCoverage'
+}
+
+// 변이 테스트(로컬 전용): ./gradlew pitest
+// 스프링 컨텍스트·DB 컨테이너를 띄우는 테스트는 변이마다 다시 떠서 느리므로 @Tag("integration")으로 제외하고 단위 테스트만 쓴다.
+pitest {
+    pitestVersion = '1.30.2'
+    junit5PluginVersion = '1.2.3'
+    // -PpitTargets=a.B,a.B$* 로 검사할 클래스를 좁힐 수 있다. (CI는 PR에서 바뀐 클래스만 넘긴다. scripts/mutation/changed-targets.sh)
+    targetClasses = providers.gradleProperty('pitTargets')
+            .map { it.split(',')*.trim().findAll { !it.isEmpty() } }
+            .getOrElse(['withoutc.chongchong.*'])
+    // 컨트롤러·설정·부트스트랩은 통합(API) 테스트 담당이라 단위 테스트 변이 점수에서 뺀다.
+    excludedClasses = [
+            'withoutc.chongchong.*.controller.*',
+            'withoutc.chongchong.*.config.*',
+            'withoutc.chongchong.ChongChongApplication',
+    ]
+    targetTests = ['withoutc.chongchong.*']
+    excludedGroups = ['integration', 'openapi-coverage']
+    threads = Runtime.runtime.availableProcessors()
+    outputFormats = ['XML', 'HTML']
+    timestampedReports = false
+    // 바뀐 클래스가 인터페이스·레코드뿐이면 변이가 0개일 수 있다. 그때도 실패 대신 빈 결과를 남긴다.
+    failWhenNoMutations = false
 }
 
 tasks.register('verifyOpenApiCoverage', Test) {
@@ -95,6 +124,7 @@ tasks.register('verifyOpenApiCoverage', Test) {
     inputs.file(layout.buildDirectory.file('openapi/covered-operations.txt'))
     shouldRunAfter tasks.named('test')
     onlyIf {
-        tasks.named('test').get().filter.commandLineIncludePatterns.empty
+        tasks.named('test').get().filter.commandLineIncludePatterns.empty &&
+                !providers.gradleProperty('excludeIntegration').isPresent()
     }
 }

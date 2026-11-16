@@ -8,6 +8,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -25,6 +26,7 @@ import tools.jackson.databind.ObjectMapper;
         properties = "management.endpoint.health.probes.enabled=true"
 )
 @ActiveProfiles("test")
+@Tag("integration")
 class ReadinessSecurityTest {
 
     @LocalServerPort

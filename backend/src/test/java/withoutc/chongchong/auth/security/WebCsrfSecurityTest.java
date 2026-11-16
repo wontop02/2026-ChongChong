@@ -16,6 +16,7 @@ import com.jayway.jsonpath.JsonPath;
 import jakarta.servlet.http.Cookie;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -38,6 +39,7 @@ import withoutc.chongchong.auth.support.TestJwtFactory;
 @AutoConfigureMockMvc
 @Import(WebCsrfSecurityTest.BearerPostController.class)
 @ActiveProfiles("test")
+@Tag("integration")
 class WebCsrfSecurityTest {
 
     private static final String CSRF_COOKIE_NAME = "XSRF-TOKEN";

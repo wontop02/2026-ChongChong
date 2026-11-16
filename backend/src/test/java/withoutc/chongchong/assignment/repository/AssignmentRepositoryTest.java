@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -32,6 +33,7 @@ import withoutc.chongchong.user.repository.UserRepository;
 @ActiveProfiles("test")
 @Transactional
 @SpringBootTest
+@Tag("integration")
 class AssignmentRepositoryTest {
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 8, 20, 9, 0);

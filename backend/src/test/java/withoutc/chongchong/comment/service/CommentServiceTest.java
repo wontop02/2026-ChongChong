@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -30,7 +31,11 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import withoutc.chongchong.assignment.entity.Assignment;
+import withoutc.chongchong.assignment.entity.AssignmentSubmission;
 import withoutc.chongchong.assignment.policy.AssignmentAccessPolicy;
+import withoutc.chongchong.auth.exception.AuthErrorCode;
+import withoutc.chongchong.auth.exception.AuthException;
 import withoutc.chongchong.assignment.repository.AssignmentRepository;
 import withoutc.chongchong.assignment.repository.AssignmentSubmissionRepository;
 import withoutc.chongchong.comment.controller.dto.CommentWriteRequest;
@@ -237,6 +242,84 @@ class CommentServiceTest {
         assertThat(response.comments().getFirst().author().role()).isNull();
         assertThat(response.comments().getFirst().isMine()).isFalse();
         assertThat(response.comments().getFirst().content()).isEqualTo("댓글 내용");
+    }
+
+    @Test
+    @DisplayName("비공개 과제의 남의 제출물 댓글 목록은 리더가 아닌 멤버에게 보여주지 않는다")
+    void rejectListOfUnreadableSubmission() {
+        StudyMember viewer = memberWithRole(1L, StudyMemberRole.MEMBER);
+        when(members.getByStudyIdAndUserIdOrThrow(10L, 1L)).thenReturn(viewer);
+        hiddenSubmission(false);
+
+        assertThatThrownBy(() -> service.getList(1L, 10L, CommentTarget.submission(20L, 30L), null, null, 3))
+                .isInstanceOf(AuthException.class)
+                .extracting(exception -> ((AuthException) exception).getErrorCode())
+                .isEqualTo(AuthErrorCode.ACCESS_DENIED);
+        verifyNoInteractions(comments);
+    }
+
+    @Test
+    @DisplayName("비공개 과제의 남의 제출물에는 리더가 아닌 멤버가 댓글을 달 수 없다")
+    void rejectCreateOnUnreadableSubmission() {
+        StudyMember writer = memberWithRole(1L, StudyMemberRole.MEMBER);
+        when(members.getByStudyIdAndUserIdOrThrow(10L, 1L)).thenReturn(writer);
+        AssignmentSubmission submission = hiddenSubmission(true);
+        lenient().when(submission.getSubmittedAt()).thenReturn(LocalDateTime.of(2026, 11, 3, 10, 0));
+
+        assertThatThrownBy(() -> service.create(1L, 10L, CommentTarget.submission(20L, 30L), new CommentWriteRequest("내용")))
+                .isInstanceOf(AuthException.class)
+                .extracting(exception -> ((AuthException) exception).getErrorCode())
+                .isEqualTo(AuthErrorCode.ACCESS_DENIED);
+        verify(comments, never()).save(any());
+        verifyNoInteractions(notifications);
+    }
+
+    @Test
+    @DisplayName("아직 실제 제출하지 않은 제출물에는 리더도 댓글을 달 수 없다")
+    void rejectCreateOnNotSubmittedSubmission() {
+        when(members.getByStudyIdAndUserIdOrThrow(10L, 1L)).thenReturn(author);
+        hiddenSubmission(true);
+
+        assertThatThrownBy(() -> service.create(1L, 10L, CommentTarget.submission(20L, 30L), new CommentWriteRequest("내용")))
+                .isInstanceOf(CommentException.class)
+                .extracting(exception -> ((CommentException) exception).getErrorCode())
+                .isEqualTo(CommentErrorCode.TARGET_NOT_READY);
+        verify(comments, never()).save(any());
+        verifyNoInteractions(notifications);
+    }
+
+    @Test
+    @DisplayName("커서와 포커스 댓글을 함께 요청하면 아무것도 조회하지 않고 잘못된 페이지 요청으로 거부한다")
+    void rejectCursorWithFocusComment() {
+        assertThatThrownBy(() -> service.getList(1L, 10L, CommentTarget.notice(20L), 5L, 3L, 3))
+                .isInstanceOf(CommentException.class)
+                .extracting(exception -> ((CommentException) exception).getErrorCode())
+                .isEqualTo(CommentErrorCode.INVALID_PAGE_REQUEST);
+        verifyNoInteractions(comments, members, notices);
+    }
+
+    private AssignmentSubmission hiddenSubmission(boolean forUpdate) {
+        Assignment assignment = mock(Assignment.class);
+        AssignmentSubmission submission = mock(AssignmentSubmission.class);
+        when(assignment.getId()).thenReturn(20L);
+        when(assignment.visibleToAllStudyMembers()).thenReturn(false);
+        when(submission.getAssignment()).thenReturn(assignment);
+        if (forUpdate) {
+            when(assignments.getByIdAndStudyIdForUpdateOrThrow(20L, 10L)).thenReturn(assignment);
+            when(submissions.getByIdAndAssignmentIdForUpdateOrThrow(30L, 20L)).thenReturn(submission);
+        } else {
+            when(assignments.getByIdAndStudyIdOrThrow(20L, 10L)).thenReturn(assignment);
+            when(submissions.getByIdAndAssignmentIdOrThrow(30L, 20L)).thenReturn(submission);
+        }
+        return submission;
+    }
+
+    private StudyMember memberWithRole(Long id, StudyMemberRole role) {
+        User user = User.create("사용자", null);
+        ReflectionTestUtils.setField(user, "id", id);
+        StudyMember member = StudyMember.create(mock(Study.class), user, "사용자", null, role);
+        ReflectionTestUtils.setField(member, "id", id);
+        return member;
     }
 
     private static Stream<CommentTarget> commentTargets() {

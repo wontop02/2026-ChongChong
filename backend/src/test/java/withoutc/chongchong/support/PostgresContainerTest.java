@@ -1,6 +1,7 @@
 package withoutc.chongchong.support;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -17,6 +18,7 @@ import withoutc.chongchong.notification.support.TestNotificationSenderConfigurat
 @ActiveProfiles("test")
 @SpringBootTest
 @Import(TestNotificationSenderConfiguration.class)
+@Tag("integration")
 public abstract class PostgresContainerTest {
 
     protected static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(

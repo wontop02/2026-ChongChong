@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.tuple;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,6 +21,7 @@ import withoutc.chongchong.user.repository.UserRepository;
 @ActiveProfiles("test")
 @Transactional
 @SpringBootTest
+@Tag("integration")
 class StudyMemberRepositoryTest {
 
     @Autowired

@@ -7,6 +7,7 @@ import jakarta.persistence.EntityManager;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -34,6 +35,7 @@ import withoutc.chongchong.user.repository.UserRepository;
 @ActiveProfiles("test")
 @Import(TestS3PresignerConfiguration.class)
 @Transactional
+@Tag("integration")
 class StudyPublicDiscoveryTest {
 
     private static final LocalDateTime CREATED_AT = LocalDateTime.of(2026, 10, 26, 12, 0);

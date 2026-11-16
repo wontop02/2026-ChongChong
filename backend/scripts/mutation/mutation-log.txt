@@ -1,0 +1,7 @@
+# 회차	대상	변이점수	생존	미실행	메모
+0	기준점	69%(47/68)	7	14	보강 전
+1	CommentTarget(대화형)	72%(49/68)	5	14	CommentTargetTest 추가, CommentTarget 33%->100%
+2	CommentService(대화형)	90%(61/68)	0	7	CommentServiceTest에 4개 추가, 권한·커서 검증. 남은 건 미실행(update/delete 6, Comment 1)
+# --- 범위를 프로젝트 전체로 확장 (integration 태그 제외, controller·config 제외)
+3	전체 기준점(원본 테스트)	68%(989/1462)	101	372	보강 전. comment 보강 테스트를 잠시 빼고 측정. 약 77초
+4	전체(comment 1·2회차 반영)	69%(1003/1462)	94	365	comment 보강분만 들어간 상태
