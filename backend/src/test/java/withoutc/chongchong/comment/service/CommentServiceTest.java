@@ -15,9 +15,12 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,7 +28,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
@@ -64,6 +69,8 @@ import withoutc.chongchong.user.service.UserProfileImageUrlResolver;
 @ExtendWith(MockitoExtension.class)
 class CommentServiceTest {
 
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-11-16T12:00:00Z"), ZoneOffset.UTC);
+
     @Mock
     private CommentRepository comments;
 
@@ -97,7 +104,7 @@ class CommentServiceTest {
         CommentTargetResolver resolver = new CommentTargetResolver(notices, assignments, submissions,
                 new AssignmentAccessPolicy());
         service = new CommentService(comments, resolver, members, users, notifications,
-                new CommentAccessPolicy(), Clock.systemUTC(), profileImageUrlResolver);
+                new CommentAccessPolicy(), CLOCK, profileImageUrlResolver);
         author = member(1L);
         notice = mock(Notice.class);
     }
@@ -296,6 +303,99 @@ class CommentServiceTest {
                 .extracting(exception -> ((CommentException) exception).getErrorCode())
                 .isEqualTo(CommentErrorCode.INVALID_PAGE_REQUEST);
         verifyNoInteractions(comments, members, notices);
+    }
+
+    @Test
+    @DisplayName("작성자는 댓글 내용을 수정하고 수정 시각을 남긴다")
+    void updateOwnCommentContentAndEditedAt() {
+        Comment comment = existingNoticeComment();
+
+        service.update(1L, 10L, CommentTarget.notice(20L), 42L, new CommentWriteRequest("  수정한 내용  "));
+
+        assertThat(comment.getContent()).isEqualTo("수정한 내용");
+        assertThat(comment.getEditedAt()).isEqualTo(LocalDateTime.of(2026, 11, 16, 12, 0));
+    }
+
+    @Test
+    @DisplayName("다른 사용자는 댓글을 수정할 수 없으며 내용과 수정 시각을 보존한다")
+    void rejectEditingOthersCommentWithoutChangingIt() {
+        Comment comment = existingNoticeComment();
+
+        assertThatThrownBy(() -> service.update(2L, 10L, CommentTarget.notice(20L), 42L,
+                new CommentWriteRequest("바꾸려는 내용")))
+                .isInstanceOf(AuthException.class)
+                .extracting(exception -> ((AuthException) exception).getErrorCode())
+                .isEqualTo(AuthErrorCode.ACCESS_DENIED);
+        assertThat(comment.getContent()).isEqualTo("원래 내용");
+        assertThat(comment.getEditedAt()).isNull();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"1, MEMBER", "2, LEADER"})
+    @DisplayName("댓글 작성자나 현재 리더는 해당 댓글을 저장소에서 삭제한다")
+    void deleteCommentAsAuthorOrLeader(Long userId, StudyMemberRole role) {
+        Comment comment = existingNoticeComment();
+        when(members.findByStudyIdAndUserId(10L, userId))
+                .thenReturn(Optional.of(memberWithRole(userId, role)));
+
+        service.delete(userId, 10L, CommentTarget.notice(20L), 42L);
+
+        verify(comments).delete(comment);
+    }
+
+    @Test
+    @DisplayName("작성자도 리더도 아닌 사용자는 접근 거부 오류를 받고 댓글을 삭제하지 않는다")
+    void rejectDeletingOthersCommentAsMember() {
+        existingNoticeComment();
+        when(members.findByStudyIdAndUserId(10L, 2L))
+                .thenReturn(Optional.of(memberWithRole(2L, StudyMemberRole.MEMBER)));
+
+        assertThatThrownBy(() -> service.delete(2L, 10L, CommentTarget.notice(20L), 42L))
+                .isInstanceOf(AuthException.class)
+                .extracting(exception -> ((AuthException) exception).getErrorCode())
+                .isEqualTo(AuthErrorCode.ACCESS_DENIED);
+        verify(comments, never()).delete(any(Comment.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0L, -1L})
+    @DisplayName("양수가 아닌 포커스 댓글 ID는 저장소 조회 전에 거부한다")
+    void rejectNonPositiveFocusCommentId(Long focusCommentId) {
+        assertThatThrownBy(() -> service.getList(1L, 10L, CommentTarget.notice(20L), null, focusCommentId, 3))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("댓글 ID는 양수여야 합니다.");
+        verifyNoInteractions(comments, members, notices, profileImageUrlResolver);
+    }
+
+    @Test
+    @DisplayName("최소 포커스 댓글 ID인 1을 허용하고 해당 댓글을 포함한 목록을 반환한다")
+    void listIncludingFocusCommentWithMinimumId() {
+        Comment focus = Comment.create(ResourceType.NOTICE, 20L, author, "첫 댓글");
+        ReflectionTestUtils.setField(focus, "id", 1L);
+        when(members.getByStudyIdAndUserIdOrThrow(10L, 1L)).thenReturn(author);
+        when(notices.getByIdAndStudyIdOrThrow(20L, 10L)).thenReturn(notice);
+        when(comments.getByIdAndResourceOrThrow(1L, ResourceType.NOTICE, 20L)).thenReturn(focus);
+        when(comments.findByCursor(eq(ResourceType.NOTICE), eq(20L), eq(1L), eq(true), any()))
+                .thenReturn(List.of(new CommentSummaryProjection(1L, 1L, 1L, "작성자", null,
+                        StudyMemberRole.LEADER, LocalDateTime.of(2026, 11, 16, 11, 0), "첫 댓글", null)));
+        when(profileImageUrlResolver.resolveForMembers(List.of(1L))).thenReturn(Map.of(1L, "author.png"));
+        when(comments.countByResourceTypeAndResourceId(ResourceType.NOTICE, 20L)).thenReturn(1L);
+
+        CommentListResponse response = service.getList(1L, 10L, CommentTarget.notice(20L), null, 1L, 3);
+
+        assertThat(response.comments()).extracting(comment -> comment.id()).containsExactly(1L);
+        assertThat(response.comments().getFirst().content()).isEqualTo("첫 댓글");
+        assertThat(response.totalCount()).isOne();
+        assertThat(response.hasNext()).isFalse();
+        assertThat(response.nextCursor()).isNull();
+    }
+
+    private Comment existingNoticeComment() {
+        Comment comment = Comment.create(ResourceType.NOTICE, 20L, author, "원래 내용");
+        ReflectionTestUtils.setField(comment, "id", 42L);
+        when(notices.getByIdAndStudyIdForUpdateOrThrow(20L, 10L)).thenReturn(notice);
+        when(comments.getByIdAndResourceOrThrow(42L, ResourceType.NOTICE, 20L)).thenReturn(comment);
+        return comment;
     }
 
     private AssignmentSubmission hiddenSubmission(boolean forUpdate) {
