@@ -89,13 +89,28 @@ jobs:
           fi
           cat "$out" >> "$GITHUB_STEP_SUMMARY"
 
+          # 같은 결과로 제목만 다른 댓글 두 개를 만든다: 처음 측정(고정)과 최신(커밋마다 갱신)
+          sha="$(echo "${{ github.event.pull_request.head.sha || github.sha }}" | cut -c1-7)"
+          { echo "## 🧬 변이 테스트 결과 — PR 처음 측정 (고정)"; echo; echo "> 커밋 \`$sha\` 기준. 이 댓글은 바뀌지 않으니 이후 결과와 비교하는 기준으로 보세요."; tail -n +2 "$out"; } > "$RUNNER_TEMP/mutation-initial.md"
+          { echo "## 🧬 변이 테스트 결과 — 최신"; echo; echo "> 커밋 \`$sha\` 기준. 커밋을 올릴 때마다 이 댓글이 갱신됩니다."; tail -n +2 "$out"; } > "$RUNNER_TEMP/mutation-latest.md"
+
       # fork에서 온 PR은 토큰에 쓰기 권한이 없으므로 댓글을 건너뛴다. (결과는 Actions 요약에서 볼 수 있다)
-      - name: Comment on PR
+      # 처음 측정: 한 번 만들면 다시 고치지 않는다 (only_create)
+      - name: Comment initial result
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
+          header: mutation-test-initial
+          only_create: true
+          path: ${{ runner.temp }}/mutation-initial.md
+
+      # 최신: PR을 처음 연 실행에서는 위 댓글과 같으므로 건너뛰고, 이후 커밋부터 갱신한다
+      - name: Comment latest result
+        if: github.event_name == 'pull_request' && github.event.action != 'opened' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
           header: mutation-test
-          path: ${{ runner.temp }}/mutation-comment.md
+          path: ${{ runner.temp }}/mutation-latest.md
 
       - name: Upload PIT report
         if: always() && steps.targets.outputs.skip != 'true'
