@@ -24,6 +24,7 @@ import org.w3c.dom.NodeList;
  * java scripts/mutation/PitReport.java todo      [mutations.xml]                 # 생존 + 미실행 (AI 입력용)
  * java scripts/mutation/PitReport.java score     [mutations.xml]                 # 한 줄 점수 (로그용)
  * java scripts/mutation/PitReport.java comment   [mutations.xml]                 # PR 댓글용 마크다운
+ * java scripts/mutation/PitReport.java compare   <보강 전.xml> <보강 후.xml>      # 클래스별 전후 비교 표
  * </pre>
  */
 public class PitReport {
@@ -88,6 +89,14 @@ public class PitReport {
     public static void main(String[] args) throws Exception {
         List<String> rest = new ArrayList<>(Arrays.asList(args));
         String mode = rest.isEmpty() ? "summary" : rest.removeFirst();
+        if (mode.equals("compare")) {
+            if (rest.size() != 2) {
+                System.err.println("사용법: compare <보강 전.xml> <보강 후.xml>");
+                System.exit(2);
+            }
+            System.out.print(compare(load(Path.of(rest.get(0))), load(Path.of(rest.get(1)))));
+            return;
+        }
         String classFilter = takeOption(rest, "--class");
         List<Mutation> mutations = load(Path.of(rest.isEmpty() ? DEFAULT_XML : rest.getFirst()));
 
@@ -98,7 +107,7 @@ public class PitReport {
             case "score" -> score(mutations);
             case "comment" -> System.out.print(comment(mutations));
             default -> {
-                System.err.println("알 수 없는 모드: " + mode + " (summary | survivors | todo | score | comment)");
+                System.err.println("알 수 없는 모드: " + mode + " (summary | survivors | todo | score | comment | compare)");
                 System.exit(2);
             }
         }
@@ -230,5 +239,30 @@ public class PitReport {
             out.append("... 외 ").append(list.size() - COMMENT_LIST_LIMIT).append("개 (아티팩트의 HTML 리포트 참고)\n");
         }
         out.append("```\n\n</details>\n\n");
+    }
+
+    static String compare(List<Mutation> before, List<Mutation> after) {
+        Map<String, List<Mutation>> beforeByClass = before.stream()
+                .collect(Collectors.groupingBy(Mutation::shortClass, TreeMap::new, Collectors.toList()));
+        Map<String, List<Mutation>> afterByClass = after.stream()
+                .collect(Collectors.groupingBy(Mutation::shortClass, TreeMap::new, Collectors.toList()));
+        java.util.SortedSet<String> names = new java.util.TreeSet<>(beforeByClass.keySet());
+        names.addAll(afterByClass.keySet());
+
+        StringBuilder out = new StringBuilder()
+                .append("| 클래스 | 보강 전 | 보강 후 | 생존 | 실행 안 됨 |\n")
+                .append("|---|---|---|---|---|\n");
+        for (String name : names) {
+            out.append(compareRow(name, Stats.of(beforeByClass.getOrDefault(name, List.of())),
+                    Stats.of(afterByClass.getOrDefault(name, List.of()))));
+        }
+        return out.append(compareRow("**합계**", Stats.of(before), Stats.of(after))).toString();
+    }
+
+    private static String compareRow(String name, Stats b, Stats a) {
+        String mark = a.detected() * b.total() > b.detected() * a.total() ? " ⬆️" : "";
+        return "| %s | %s (%d/%d) | **%s** (%d/%d)%s | %d → %d | %d → %d |\n".formatted(name,
+                b.score(), b.detected(), b.total(), a.score(), a.detected(), a.total(), mark,
+                b.survived(), a.survived(), b.noCoverage(), a.noCoverage());
     }
 }

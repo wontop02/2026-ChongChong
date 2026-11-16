@@ -32,7 +32,6 @@ jobs:
     env:
       # GH_TOKEN은 AI 단계에 보이지 않도록 job 전체가 아니라 필요한 단계에만 준다.
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      MIN_SCORE: "80" # 변이 점수가 이 값(%) 이상이면 AI를 부르지 않거나 반복을 멈춘다
       BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
       - name: Checkout PR branch
@@ -67,15 +66,11 @@ jobs:
           PIT_TARGETS: ${{ steps.targets.outputs.targets }}
         run: |
           ./gradlew pitest -q -PpitTargets="$PIT_TARGETS"
-          line="$(java scripts/mutation/PitReport.java score)"
-          echo "score=$(echo "$line" | cut -f1)" >> "$GITHUB_OUTPUT"
-          read -r detected total < <(echo "$line" | sed -E 's/^[^(]*\(([0-9]+)\/([0-9]+)\).*/\1 \2/')
-          if [ "$total" -gt 0 ] && [ $((detected * 100)) -ge $((MIN_SCORE * total)) ]; then
-            echo "pass=true" >> "$GITHUB_OUTPUT"
-          fi
+          echo "score=$(java scripts/mutation/PitReport.java score | cut -f1)" >> "$GITHUB_OUTPUT"
+          cp build/reports/pitest/mutations.xml "$RUNNER_TEMP/before.xml"
 
       - name: Run AI loop
-        if: steps.targets.outputs.skip != 'true' && steps.before.outputs.pass != 'true'
+        if: steps.targets.outputs.skip != 'true'
         id: loop
         env:
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
@@ -88,6 +83,7 @@ jobs:
           PIT_TARGETS: ${{ steps.targets.outputs.targets }}
           MUTATION_LOG: /dev/null
           RUN_DIR: ${{ runner.temp }}/ai-loop
+          REUSE_FIRST_MEASURE: "1" # 바로 앞 단계의 보강 전 측정 결과를 그대로 쓴다
         run: |
           if [ -z "$CODEX_AUTH_JSON" ]; then
             echo "CODEX_AUTH_JSON 시크릿이 없습니다."
@@ -98,13 +94,14 @@ jobs:
           unset CODEX_AUTH_JSON
           git rev-parse HEAD > "$RUNNER_TEMP/head-before"
           set +e
-          scripts/mutation/ai-loop.sh 3 | tee "$RUNNER_TEMP/ai-loop.log"
+          # 보강은 1회만: AI 1번 → 단위 테스트 → 보강 후 측정. 더 필요하면 라벨을 다시 붙인다.
+          scripts/mutation/ai-loop.sh 1 | tee "$RUNNER_TEMP/ai-loop.log"
           echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           echo "score=$(java scripts/mutation/PitReport.java score | cut -f1)" >> "$GITHUB_OUTPUT"
 
       # 테스트·equivalent.md 밖의 파일이 바뀌었으면 커밋하지 않는다. (ai-loop.sh의 운영 코드 지문 검사에 더한 이중 확인)
       - name: Check changed files
-        if: steps.targets.outputs.skip != 'true' && steps.before.outputs.pass != 'true'
+        if: steps.targets.outputs.skip != 'true'
         id: changes
         run: |
           if [ "$(git rev-parse HEAD)" != "$(cat "$RUNNER_TEMP/head-before" 2>/dev/null)" ]; then
@@ -146,13 +143,9 @@ jobs:
             if [ "${{ steps.targets.outputs.skip }}" = "true" ]; then
               echo "이번 PR에서 바뀐 검사 대상 클래스가 없어 실행하지 않았습니다."
             else
-              echo "기준: 이번 PR에서 바뀐 클래스의 변이 점수 ${MIN_SCORE}% 이상"
-              echo
               echo "| 보강 전 | 보강 후 | 결과 |"
               echo "|---|---|---|"
-              if [ "${{ steps.before.outputs.pass }}" = "true" ]; then
-                result="✅ 이미 기준(${MIN_SCORE}%) 이상이라 AI를 실행하지 않음"
-              elif [ -n "${{ steps.commit.outputs.sha }}" ]; then
+              if [ -n "${{ steps.commit.outputs.sha }}" ]; then
                 result="✅ 커밋 \`${{ steps.commit.outputs.sha }}\` 추가 — 리뷰 후 마음에 안 들면 이 커밋만 되돌리세요. 이어서 작업하기 전에 \`git pull\`"
               elif [ "${{ steps.loop.outputs.exit }}" = "nokey" ]; then
                 result="⛔ 저장소 시크릿 \`CODEX_AUTH_JSON\`이 없어 실행하지 않음"
@@ -167,6 +160,13 @@ jobs:
               fi
               echo "| ${{ steps.before.outputs.score }} | ${{ steps.loop.outputs.score || steps.before.outputs.score }} | $result |"
               echo
+              # 보강이 정상으로 끝났을 때만 클래스별 전후 비교 (중단됐으면 마지막 측정이 보강 전 상태라 비교 의미 없음)
+              if [ "${{ steps.loop.outputs.exit }}" = "0" ] && [ -f "$RUNNER_TEMP/before.xml" ]; then
+                echo "### 클래스별 보강 전후"
+                echo
+                java scripts/mutation/PitReport.java compare "$RUNNER_TEMP/before.xml" build/reports/pitest/mutations.xml
+                echo
+              fi
               echo "<details><summary>AI 답변 (추가한 테스트, 동등 변이 판단, 실패한 테스트)</summary>"
               echo
               for f in "$RUNNER_TEMP"/ai-loop/ai-*.md; do
