@@ -63,6 +63,7 @@ import withoutc.chongchong.user.repository.UserRepository;
 import withoutc.chongchong.user.entity.User;
 import withoutc.chongchong.user.service.UserProfileImageUrlResolver;
 
+@DisplayName("과제 서비스")
 @ExtendWith(MockitoExtension.class)
 class AssignmentServiceTest {
 
