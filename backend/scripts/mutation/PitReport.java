@@ -31,7 +31,7 @@ public class PitReport {
     private static final String DEFAULT_XML = "build/reports/pitest/mutations.xml";
     private static final String PACKAGE_PREFIX = "withoutc.chongchong.";
     private static final Set<String> DETECTED = Set.of("KILLED", "TIMED_OUT", "MEMORY_ERROR");
-    private static final int COMMENT_SURVIVOR_LIMIT = 200;
+    private static final int COMMENT_LIST_LIMIT = 100;
 
     record Mutation(String status, String mutatedClass, String method, int line, String mutator, String description) {
 
@@ -49,6 +49,13 @@ public class PitReport {
 
         String shortClass() {
             return mutatedClass.startsWith(PACKAGE_PREFIX) ? mutatedClass.substring(PACKAGE_PREFIX.length()) : mutatedClass;
+        }
+
+        /** withoutc.chongchong 바로 아래 패키지 (comment, auth, ...) */
+        String domain() {
+            String rest = shortClass();
+            int dot = rest.indexOf('.');
+            return dot < 0 ? rest : rest.substring(0, dot);
         }
 
         String oneLine() {
@@ -174,36 +181,54 @@ public class PitReport {
     static String comment(List<Mutation> mutations) {
         Stats total = Stats.of(mutations);
         List<Mutation> survived = sorted(mutations, Mutation::survived);
-        Map<String, List<Mutation>> weakClasses = survived.stream()
-                .collect(Collectors.groupingBy(Mutation::shortClass, TreeMap::new, Collectors.toList()));
+        List<Mutation> noCoverage = sorted(mutations, Mutation::noCoverage);
 
         StringBuilder out = new StringBuilder()
                 .append("## 🧬 변이 테스트 결과\n\n")
                 .append("코드를 일부러 망가뜨렸을 때 단위 테스트가 알아챈 비율입니다. ")
-                .append("**살아남은 변이**는 테스트가 못 잡은 버그라 줄일수록 좋습니다.\n\n")
+                .append("**살아남음**은 테스트가 실행했지만 못 잡은 것, **실행 안 됨**은 그 코드를 실행하는 단위 테스트가 없는 것입니다.\n\n")
                 .append("| 변이 점수 | 테스트 강도 | 잡음 | 살아남음 | 실행 안 됨 | 전체 |\n")
                 .append("|---|---|---|---|---|---|\n")
                 .append("| **%s** | %s | %d | %d | %d | %d |\n\n".formatted(total.score(), total.strength(),
                         total.detected(), total.survived(), total.noCoverage(), total.total()));
 
+        out.append("### 도메인별\n\n").append(groupTable(mutations, Mutation::domain, "도메인")).append('\n');
+        out.append("<details><summary>클래스별</summary>\n\n")
+                .append(groupTable(mutations, Mutation::shortClass, "클래스"))
+                .append("\n</details>\n\n");
+
+        appendList(out, "살아남은 변이", survived);
+        appendList(out, "실행 안 된 변이", noCoverage);
         if (survived.isEmpty()) {
-            return out.append("살아남은 변이가 없습니다. ✅\n").toString();
+            out.append("살아남은 변이가 없습니다. ✅\n");
         }
+        return out.toString();
+    }
 
-        out.append("<details><summary>살아남은 변이가 있는 클래스 (").append(weakClasses.size()).append("개)</summary>\n\n")
-                .append("| 클래스 | 변이 | 생존 | 미실행 | 변이 점수 | 테스트 강도 |\n|---|---|---|---|---|---|\n");
-        weakClasses.keySet().forEach(name -> {
-            Stats s = Stats.of(mutations.stream().filter(m -> m.shortClass().equals(name)).toList());
-            out.append("| %s | %d | %d | %d | %s | %s |\n"
-                    .formatted(name, s.total(), s.survived(), s.noCoverage(), s.score(), s.strength()));
+    private static String groupTable(List<Mutation> mutations, java.util.function.Function<Mutation, String> key,
+                                     String title) {
+        Map<String, List<Mutation>> groups = mutations.stream()
+                .collect(Collectors.groupingBy(key, TreeMap::new, Collectors.toList()));
+        StringBuilder out = new StringBuilder()
+                .append("| ").append(title).append(" | 변이 점수 | 테스트 강도 | 잡음 | 살아남음 | 실행 안 됨 | 전체 |\n")
+                .append("|---|---|---|---|---|---|---|\n");
+        groups.forEach((name, list) -> {
+            Stats s = Stats.of(list);
+            out.append("| %s | %s | %s | %d | %d | %d | %d |\n".formatted(name, s.score(), s.strength(),
+                    s.detected(), s.survived(), s.noCoverage(), s.total()));
         });
-        out.append("\n</details>\n\n");
+        return out.toString();
+    }
 
-        out.append("<details><summary>살아남은 변이 목록 (").append(survived.size()).append("개)</summary>\n\n```\n");
-        survived.stream().limit(COMMENT_SURVIVOR_LIMIT).forEach(m -> out.append(m.oneLine()).append('\n'));
-        if (survived.size() > COMMENT_SURVIVOR_LIMIT) {
-            out.append("... 외 ").append(survived.size() - COMMENT_SURVIVOR_LIMIT).append("개 (아티팩트의 HTML 리포트 참고)\n");
+    private static void appendList(StringBuilder out, String title, List<Mutation> list) {
+        if (list.isEmpty()) {
+            return;
         }
-        return out.append("```\n\n</details>\n").toString();
+        out.append("<details><summary>").append(title).append(" (").append(list.size()).append("개)</summary>\n\n```\n");
+        list.stream().limit(COMMENT_LIST_LIMIT).forEach(m -> out.append(m.oneLine()).append('\n'));
+        if (list.size() > COMMENT_LIST_LIMIT) {
+            out.append("... 외 ").append(list.size() - COMMENT_LIST_LIMIT).append("개 (아티팩트의 HTML 리포트 참고)\n");
+        }
+        out.append("```\n\n</details>\n\n");
     }
 }
