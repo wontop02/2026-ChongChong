@@ -49,7 +49,7 @@ run_agent() {
           --max-turns 20 \
           --allowedTools "Read" "Glob" "Grep" \
             "Edit(/backend/src/test/**)" "Write(/backend/src/test/**)" \
-            "Edit(/backend/scripts/mutation/equivalent.md)" \
+            "Edit(/backend/scripts/mutation/equivalent.md)" "Edit(/backend/scripts/mutation/covered-by-integration.md)" \
             "Bash(cd backend)" "Bash(./gradlew test *)" \
           >"$answer" 2>"$log")
       ;;
@@ -118,12 +118,16 @@ $(cat "$RUN_DIR/todo-$round.txt")
 
 규칙
 1. backend/src/main 과 backend/build.gradle 은 절대 수정하지 않는다. 테스트만 추가·수정한다.
-2. 테스트는 대상 클래스와 같은 패키지(backend/src/test/java 아래)에 둔다. 스프링 컨텍스트나 DB를 띄우지 않는 순수 단위 테스트(Mockito 가능)만 쓴다. @SpringBootTest, @Tag("integration"), PostgresContainerTest 상속은 쓰지 않는다 (PIT가 integration 태그 테스트는 제외하므로 변이를 잡지 못한다).
-3. 기존 테스트 스타일(@DisplayName 한국어, AssertJ)을 따른다.
-4. "메서드가 호출됐는지"보다 바깥에서 보이는 행동(반환값, 예외와 에러 코드, 저장·조회 여부)을 확인한다. 구현 코드를 그대로 베끼는 테스트는 쓰지 않는다.
-5. 코드를 바꿔도 동작이 같아 어떤 테스트로도 잡을 수 없는 동등 변이라고 판단되면 테스트를 쓰지 말고 backend/scripts/mutation/equivalent.md 표에 한 줄 추가한다. "사람 판정" 칸은 비워 둔다.
-6. 테스트를 다 쓴 뒤 backend 에서 ./gradlew test -PexcludeIntegration --tests '<추가한 테스트 클래스>' 로 실행한다. 실패하면 테스트를 운영 코드에 맞추지 말고, 왜 실패했는지와 실제 버그일 가능성을 마지막 답변에 적는다.
-7. 마지막 답변은 한국어로: 추가한 테스트 목록, 각 테스트가 노린 변이, 동등 변이로 판단한 것, 실패한 테스트.
+2. 먼저 같은 시나리오를 이미 검증하는 테스트가 있는지 backend/src/test 전체에서 찾는다. 특히 @Tag("integration") 이 붙은 통합 테스트(또는 PostgresContainerTest 상속, @SpringBootTest)는 PIT 측정에서 빠지므로, 거기서 이미 검증하는 코드도 [NO_COVERAGE]로 보인다. 이미 검증하고 있으면 단위 테스트를 쓰지 말고 backend/scripts/mutation/covered-by-integration.md 표에 위치·변이·이미 검증하는 테스트(클래스와 @DisplayName)를 한 줄 추가한다. "사람 판정" 칸은 비워 둔다. 점수를 올리는 것이 목표가 아니라, 아직 아무도 검증하지 않는 동작을 찾는 것이 목표다.
+3. 새로 쓰는 테스트는 대상 클래스와 같은 패키지(backend/src/test/java 아래)에 둔다. 스프링 컨텍스트나 DB를 띄우지 않는 순수 단위 테스트(Mockito 가능)만 쓴다. @SpringBootTest, @Tag("integration"), PostgresContainerTest 상속은 쓰지 않는다.
+4. 기존 테스트 스타일(@DisplayName 한국어, AssertJ)을 따른다.
+5. 바깥에서 보이는 행동(반환값, 예외 타입과 에러 코드, 상태 변화)을 확인한다. 다음은 쓰지 않는다:
+   - 예외 메시지 문구 비교 (문구만 바꿔도 깨진다. 예외 타입이나 에러 코드로 확인한다)
+   - 구현 방식 검증 (예: 특정 메서드를 안 불렀는지 never(), 호출 순서). 단, 실패 시 저장·삭제·알림 같은 부수 효과가 없음을 확인하는 것은 행동이므로 괜찮다
+   - 가짜 응답(stub)을 5개 넘게 쌓아야 하는 테스트. 그런 변이는 테스트를 쓰지 말고 마지막 답변에 "단위 테스트로 잡기에 무거움"이라고 이유와 함께 적는다
+6. 코드를 바꿔도 동작이 같아 어떤 테스트로도 잡을 수 없는 동등 변이라고 판단되면 테스트를 쓰지 말고 backend/scripts/mutation/equivalent.md 표에 한 줄 추가한다. "사람 판정" 칸은 비워 둔다.
+7. 테스트를 다 쓴 뒤 backend 에서 ./gradlew test -PexcludeIntegration --tests '<추가한 테스트 클래스>' 로 실행한다. 실패하면 테스트를 운영 코드에 맞추지 말고, 왜 실패했는지와 실제 버그일 가능성을 마지막 답변에 적는다.
+8. 마지막 답변은 한국어로: 추가한 테스트와 각 테스트가 노린 변이, 이미 검증되고 있어 기록만 한 것, 동등 변이로 판단한 것, 무거워서 건너뛴 것, 실패한 테스트.
 EOF
 )
   echo "=== 회차 $round: $AI_AGENT 실행 ==="

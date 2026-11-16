@@ -1,7 +1,7 @@
 name: Backend Mutation AI
 
 # PR에 `mutation-fix` 라벨을 붙이면 AI가 이 PR에서 바뀐 클래스의 단위 테스트를 보강해서 같은 PR에 커밋한다.
-# - 테스트(backend/src/test)와 equivalent.md만 바꿀 수 있다. 다른 파일이 바뀌면 커밋하지 않는다.
+# - 테스트(backend/src/test)와 equivalent.md·covered-by-integration.md만 바꿀 수 있다. 다른 파일이 바뀌면 커밋하지 않는다.
 # - AI가 쓴 테스트가 실패하면(버그 후보) 커밋하지 않고 댓글로 알린다.
 # - 끝나면 라벨을 떼므로, 다시 붙이면 다시 실행된다.
 # - AI: 지금은 Codex(ChatGPT 로그인). 필요한 시크릿: CODEX_AUTH_JSON (~/.codex/auth.json 내용)
@@ -110,7 +110,7 @@ jobs:
             exit 0
           fi
           changed="$(git status --porcelain --untracked-files=all | cut -c4-)"
-          outside="$(echo "$changed" | grep -v -e '^backend/src/test/' -e '^backend/scripts/mutation/equivalent.md$' | grep -v '^$' || true)"
+          outside="$(echo "$changed" | grep -v -e '^backend/src/test/' -e '^backend/scripts/mutation/equivalent.md$' -e '^backend/scripts/mutation/covered-by-integration.md$' | grep -v '^$' || true)"
           if [ -n "$outside" ]; then
             echo "status=outside" >> "$GITHUB_OUTPUT"
             echo "허용되지 않은 파일이 바뀌었습니다:"; echo "$outside"
@@ -128,7 +128,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- src/test scripts/mutation/equivalent.md # 이 단계는 backend 폴더에서 실행된다
+          git add -- src/test scripts/mutation/equivalent.md scripts/mutation/covered-by-integration.md # 이 단계는 backend 폴더에서 실행된다
           git commit -m "[test] 변이 테스트 보강 (AI)" -m "변이 점수 ${{ steps.before.outputs.score }} → ${{ steps.loop.outputs.score }}"
           git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
@@ -167,7 +167,7 @@ jobs:
                 java scripts/mutation/PitReport.java compare "$RUNNER_TEMP/before.xml" build/reports/pitest/mutations.xml
                 echo
               fi
-              echo "<details><summary>AI 답변 (추가한 테스트, 동등 변이 판단, 실패한 테스트)</summary>"
+              echo "<details><summary>AI 답변 (추가한 테스트, 이미 검증되던 것, 동등 변이, 실패한 테스트)</summary>"
               echo
               for f in "$RUNNER_TEMP"/ai-loop/ai-*.md; do
                 [ -f "$f" ] || continue
