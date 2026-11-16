@@ -6,7 +6,7 @@
 #
 # - src/main에서 바뀐 클래스
 # - src/test에서 바뀐 FooTest.java 의 짝인 Foo (테스트만 보강한 PR도 점수가 나오게)
-# - 컨트롤러·설정·부트스트랩은 build.gradle의 excludedClasses와 같이 뺀다.
+# - 컨트롤러·설정·리포지토리·부트스트랩은 build.gradle의 excludedClasses와 같이 뺀다.
 set -euo pipefail
 
 base="${1:?기준 커밋을 주세요 (예: origin/dev)}"
@@ -25,7 +25,7 @@ test="backend/src/test/java"
     cls="${cls%.java}"
     cls="${cls//\//.}"
     case "$cls" in
-        *.controller.* | *.config.* | withoutc.chongchong.ChongChongApplication) continue ;;
+        *.controller.* | *.config.* | *.repository.* | withoutc.chongchong.ChongChongApplication) continue ;;
     esac
     printf '%s\n%s$*\n' "$cls" "$cls"   # 내부 클래스(Foo$Bar)까지 포함
 done | paste -sd, -

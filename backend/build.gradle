@@ -92,9 +92,10 @@ pitest {
     targetClasses = providers.gradleProperty('pitTargets')
             .map { it.split(',')*.trim().findAll { !it.isEmpty() } }
             .getOrElse(['withoutc.chongchong.*'])
-    // 컨트롤러·설정·부트스트랩은 통합(API) 테스트 담당이라 단위 테스트 변이 점수에서 뺀다.
+    // 컨트롤러·설정·부트스트랩(API 테스트)과 리포지토리(DB 쿼리, DB 테스트)는 통합 테스트 담당이라 단위 테스트 변이 점수에서 뺀다.
     excludedClasses = [
             'withoutc.chongchong.*.controller.*',
+            'withoutc.chongchong.*.repository.*',
             'withoutc.chongchong.*.config.*',
             'withoutc.chongchong.ChongChongApplication',
     ]
