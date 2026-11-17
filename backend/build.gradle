@@ -99,8 +99,21 @@ pitest {
             'withoutc.chongchong.*.config.*',
             'withoutc.chongchong.ChongChongApplication',
     ]
-    targetTests = ['withoutc.chongchong.*']
-    excludedGroups = ['integration', 'openapi-coverage']
+    // -PpitTests=a.FooTest,a.BarTest 로 돌릴 테스트를 좁힐 수 있다.
+    targetTests = providers.gradleProperty('pitTests')
+            .map { it.split(',')*.trim().findAll { !it.isEmpty() } }
+            .getOrElse(['withoutc.chongchong.*'])
+    // -PpitWithIntegration 이면 통합 테스트도 포함한다 (느림, Docker 필요). "통합 테스트가 이미 잡는다"는 기록을 확인할 때만 쓴다.
+    excludedGroups = providers.gradleProperty('pitWithIntegration').isPresent()
+            ? ['openapi-coverage'] : ['integration', 'openapi-coverage']
+    // 통합 테스트(API 테스트)는 test 작업과 같은 시스템 설정이 필요하다. 커버리지 기록은 test 결과를 덮어쓰지 않게 따로 둔다.
+    if (providers.gradleProperty('pitWithIntegration').isPresent()) {
+        jvmArgs = [
+                '-Dspring.test.context.cache.maxSize=8',
+                "-Dopenapi.spec.path=${layout.projectDirectory.file('docs/openapi/openapi.yaml').asFile.absolutePath}".toString(),
+                "-Dopenapi.coverage.path=${layout.buildDirectory.file('pitest-openapi/covered-operations.txt').get().asFile.absolutePath}".toString(),
+        ]
+    }
     threads = Runtime.runtime.availableProcessors()
     outputFormats = ['XML', 'HTML']
     timestampedReports = false
