@@ -2,7 +2,8 @@
 # PIT 변이 테스트 + AI 테스트 보강 자동 루프 (로컬 + CI의 be-mutation-ai.yml)
 #
 # 사용법 (저장소 어디서든): backend/scripts/mutation/ai-loop.sh [최대회차=5]
-# 한 회차에 남은 변이가 많으면 앞에서부터 MAX_ITEMS(기본 30)개만 넘긴다.
+# 한 회차에 남은 변이가 많으면 살아남은 변이(SURVIVED)부터 MAX_ITEMS(기본 100)개만 넘긴다.
+# 잘렸으면 $RUN_DIR/truncated-<회차>.txt 에 "넘긴 수/전체 수"를 남긴다.
 #
 # 환경 변수 (모두 선택)
 #   PIT_TARGETS   검사할 클래스 (changed-targets.sh 출력). 없으면 전체
@@ -95,8 +96,15 @@ for ((i = 1; i <= MAX_ROUNDS; i++)); do
     measure "$round-before"
   fi
   java "$REPORT" todo "$XML" >"$RUN_DIR/todo-all-$round.txt"
-  head -n "${MAX_ITEMS:-30}" "$RUN_DIR/todo-all-$round.txt" >"$RUN_DIR/todo-$round.txt"
+  # 살아남은 변이(테스트가 실행했는데 못 잡음)가 실행 안 됨(통합 테스트 담당일 수 있음)보다 먼저 볼 가치가 크다
+  { grep '^\[SURVIVED\]' "$RUN_DIR/todo-all-$round.txt" || true; grep -v '^\[SURVIVED\]' "$RUN_DIR/todo-all-$round.txt" || true; } \
+    | head -n "${MAX_ITEMS:-100}" >"$RUN_DIR/todo-$round.txt"
+  passed=$(wc -l <"$RUN_DIR/todo-$round.txt" | tr -d ' ')
   left=$(wc -l <"$RUN_DIR/todo-all-$round.txt" | tr -d ' ')
+  if [[ "$passed" -lt "$left" ]]; then
+    echo "$passed/$left" >"$RUN_DIR/truncated-$round.txt"
+    echo "주의: 남은 변이 ${left}개 중 ${passed}개만 AI에게 넘깁니다 (MAX_ITEMS)"
+  fi
   echo "남은 변이: $left개"
 
   if [[ "$left" -eq 0 ]]; then

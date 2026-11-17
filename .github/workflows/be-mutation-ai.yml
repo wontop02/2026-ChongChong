@@ -163,6 +163,11 @@ jobs:
               fi
               echo "| ${{ steps.before.outputs.score }} | ${{ steps.loop.outputs.score || steps.before.outputs.score }} | $result |"
               echo
+              if [ -f "$RUNNER_TEMP/ai-loop/truncated-1.txt" ]; then
+                IFS=/ read -r passed total < "$RUNNER_TEMP/ai-loop/truncated-1.txt"
+                echo "> ⚠️ 남은 변이 ${total}개 중 **${passed}개만** AI에게 넘겼습니다 (살아남은 변이 우선). 나머지는 이번 보강에서 다루지 않았습니다. 라벨을 다시 붙이면 이어서 보강합니다."
+                echo
+              fi
               # 보강이 정상으로 끝났을 때만 클래스별 전후 비교 (중단됐으면 마지막 측정이 보강 전 상태라 비교 의미 없음)
               if [ "${{ steps.loop.outputs.exit }}" = "0" ] && [ -f "$RUNNER_TEMP/before.xml" ]; then
                 echo "### 클래스별 보강 전후"
