@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -23,6 +24,7 @@ import withoutc.chongchong.study.repository.StudyRepository;
 @Transactional
 @Import(JpaAuditingConfigTest.FixedClockConfig.class)
 @SpringBootTest
+@Tag("integration")
 class JpaAuditingConfigTest {
 
     private static final Instant NOW = Instant.parse("2026-08-27T10:00:00Z");

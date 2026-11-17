@@ -28,6 +28,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -61,6 +62,7 @@ import withoutc.chongchong.user.repository.UserRepository;
         KakaoSocialLoginAcceptanceTest.CurrentUserController.class
 })
 @ActiveProfiles("test")
+@Tag("integration")
 class KakaoSocialLoginAcceptanceTest {
 
     private static final String CSRF_COOKIE_NAME = "XSRF-TOKEN";

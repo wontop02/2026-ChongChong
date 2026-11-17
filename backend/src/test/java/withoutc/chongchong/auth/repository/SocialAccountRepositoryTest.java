@@ -7,6 +7,7 @@ import jakarta.persistence.EntityManager;
 import java.util.Map;
 import org.hibernate.Hibernate;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -22,6 +23,7 @@ import withoutc.chongchong.user.repository.UserRepository;
 @SpringBootTest
 @ActiveProfiles("test")
 @Transactional
+@Tag("integration")
 class SocialAccountRepositoryTest {
 
     @Autowired

@@ -16,6 +16,7 @@ import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -44,6 +45,7 @@ import withoutc.chongchong.user.repository.UserRepository;
 @ActiveProfiles("test")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import({TestS3PresignerConfiguration.class, LeaderNoticeExpiryApiTest.FixedClockConfiguration.class})
+@Tag("integration")
 class LeaderNoticeExpiryApiTest {
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 11, 6, 10, 0);

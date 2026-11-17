@@ -1,0 +1,215 @@
+name: Backend Mutation AI
+
+# PR에 `mutation-fix` 라벨을 붙이면 AI가 이 PR에서 바뀐 클래스의 단위 테스트를 보강해서 같은 PR에 커밋한다.
+# - 테스트(backend/src/test)와 equivalent.md·covered-by-integration.md만 바꿀 수 있다. 다른 파일이 바뀌면 커밋하지 않는다.
+# - AI가 쓴 테스트가 실패하면(버그 후보) 커밋하지 않고 댓글로 알린다.
+# - 끝나면 라벨을 떼므로, 다시 붙이면 다시 실행된다.
+# - AI: 지금은 Codex(ChatGPT 로그인). 필요한 시크릿: CODEX_AUTH_JSON (~/.codex/auth.json 내용)
+#   Claude로 바꾸려면 AI_AGENT를 claude로, 시크릿을 ANTHROPIC_API_KEY로 바꾼다.
+# - AI가 직접 push하지 못하게, 체크아웃할 때 인증 정보를 남기지 않고 커밋 단계에서만 토큰을 쓴다.
+on:
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # 보강한 테스트를 PR 브랜치에 커밋
+  pull-requests: write # 결과 댓글, 라벨 떼기
+
+jobs:
+  reinforce:
+    name: AI test reinforcement
+    # fork에서 온 PR은 시크릿·쓰기 권한이 없으므로 돌리지 않는다.
+    if: github.event.label.name == 'mutation-fix' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # GH_TOKEN은 AI 단계에 보이지 않도록 job 전체가 아니라 필요한 단계에만 준다.
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0 # 기준 브랜치와 비교해서 바뀐 클래스를 찾기 위해
+          persist-credentials: false # AI 실행 중에는 push 권한이 없도록
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          # PR 실행도 Gradle 캐시를 저장한다. 저장하지 않으면 캐시가 없는 저장소(예: 개인 fork)에서는
+          # 매번 의존성을 전부 내려받다가 Maven Central이 429(Too Many Requests)로 막는다.
+          # PR에서 저장한 캐시는 그 PR 실행에서만 다시 쓰이므로 다른 브랜치를 오염시키지 않는다.
+          cache-read-only: false
+      - name: Install Codex
+        run: npm install -g @openai/codex
+
+      - name: Find changed classes
+        id: targets
+        run: |
+          targets="$(scripts/mutation/changed-targets.sh "origin/$BASE_REF")"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          [ -n "$targets" ] || echo "skip=true" >> "$GITHUB_OUTPUT"
+
+      - name: Measure before
+        if: steps.targets.outputs.skip != 'true'
+        id: before
+        env:
+          PIT_TARGETS: ${{ steps.targets.outputs.targets }}
+        run: |
+          ./gradlew pitest -q -PpitTargets="$PIT_TARGETS"
+          echo "score=$(java scripts/mutation/PitReport.java score | cut -f1)" >> "$GITHUB_OUTPUT"
+          cp build/reports/pitest/mutations.xml "$RUNNER_TEMP/before.xml"
+
+      - name: Run AI loop
+        if: steps.targets.outputs.skip != 'true'
+        id: loop
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          AI_AGENT: codex
+          CODEX_MODEL: gpt-6.1-sol # 로컬 ~/.codex/config.toml과 같은 모델
+          CODEX_EFFORT: high # 로컬은 max. CI는 시간·사용량을 줄이려고 한 단계 낮춤
+          # 러너는 이번 실행이 끝나면 버려지는 일회용 VM이고, 리눅스 러너에서는 codex 샌드박스가 동작하지 않는 경우가 있어 끈다.
+          # 대신 push 권한을 빼 두고, 아래 단계에서 바뀐 파일과 커밋을 검사한다.
+          CODEX_SANDBOX: danger-full-access
+          PIT_TARGETS: ${{ steps.targets.outputs.targets }}
+          MUTATION_LOG: /dev/null
+          RUN_DIR: ${{ runner.temp }}/ai-loop
+          REUSE_FIRST_MEASURE: "1" # 바로 앞 단계의 보강 전 측정 결과를 그대로 쓴다
+        run: |
+          if [ -z "$CODEX_AUTH_JSON" ]; then
+            echo "CODEX_AUTH_JSON 시크릿이 없습니다."
+            echo "exit=nokey" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p ~/.codex && printf '%s' "$CODEX_AUTH_JSON" > ~/.codex/auth.json && chmod 600 ~/.codex/auth.json
+          unset CODEX_AUTH_JSON
+          git rev-parse HEAD > "$RUNNER_TEMP/head-before"
+          set +e
+          # 보강은 1회만: AI 1번 → 단위 테스트 → 보강 후 측정. 더 필요하면 라벨을 다시 붙인다.
+          scripts/mutation/ai-loop.sh 1 | tee "$RUNNER_TEMP/ai-loop.log"
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          echo "score=$(java scripts/mutation/PitReport.java score | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      # 테스트·equivalent.md 밖의 파일이 바뀌었으면 커밋하지 않는다. (ai-loop.sh의 운영 코드 지문 검사에 더한 이중 확인)
+      - name: Check changed files
+        if: steps.targets.outputs.skip != 'true'
+        id: changes
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$(cat "$RUNNER_TEMP/head-before" 2>/dev/null)" ]; then
+            echo "status=outside" >> "$GITHUB_OUTPUT"
+            echo "AI가 직접 커밋을 만들었습니다. 커밋하지 않습니다."
+            exit 0
+          fi
+          changed="$(git status --porcelain --untracked-files=all | cut -c4-)"
+          outside="$(echo "$changed" | grep -v -e '^backend/src/test/' -e '^backend/scripts/mutation/equivalent.md$' -e '^backend/scripts/mutation/covered-by-integration.md$' | grep -v '^$' || true)"
+          if [ -n "$outside" ]; then
+            echo "status=outside" >> "$GITHUB_OUTPUT"
+            echo "허용되지 않은 파일이 바뀌었습니다:"; echo "$outside"
+          elif [ -z "$changed" ]; then
+            echo "status=none" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push
+        if: steps.loop.outputs.exit == '0' && steps.changes.outputs.status == 'ok'
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- src/test scripts/mutation/equivalent.md scripts/mutation/covered-by-integration.md # 이 단계는 backend 폴더에서 실행된다
+          git commit -m "[test] 변이 테스트 보강 (AI)" -m "변이 점수 ${{ steps.before.outputs.score }} → ${{ steps.loop.outputs.score }}"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build comment
+        if: always()
+        run: |
+          out="$RUNNER_TEMP/ai-comment.md"
+          {
+            echo "## 🤖 AI 테스트 보강 결과"
+            echo
+            if [ "${{ steps.targets.outputs.skip }}" = "true" ]; then
+              echo "이번 PR에서 바뀐 검사 대상 클래스가 없어 실행하지 않았습니다."
+            else
+              echo "| 보강 전 | 보강 후 | 결과 |"
+              echo "|---|---|---|"
+              if [ -n "${{ steps.commit.outputs.sha }}" ]; then
+                result="✅ 커밋 \`${{ steps.commit.outputs.sha }}\` 추가 — 리뷰 후 마음에 안 들면 이 커밋만 되돌리세요. 이어서 작업하기 전에 \`git pull\`"
+              elif [ "${{ steps.loop.outputs.exit }}" = "nokey" ]; then
+                result="⛔ 저장소 시크릿 \`CODEX_AUTH_JSON\`이 없어 실행하지 않음"
+              elif [ "${{ steps.changes.outputs.status }}" = "outside" ]; then
+                result="⛔ 테스트 밖의 파일이 바뀌었거나 AI가 직접 커밋해서 커밋하지 않음"
+              elif [ "${{ steps.loop.outputs.exit }}" != "0" ]; then
+                result="⚠️ 중단 — AI가 쓴 테스트가 실패했거나 운영 코드가 바뀜. **실제 버그 후보**일 수 있으니 아래 내용을 확인하세요 (커밋 안 함)"
+              elif [ "${{ steps.changes.outputs.status }}" = "none" ]; then
+                result="바뀐 테스트 없음"
+              else
+                result="❌ 실행 실패 — Actions 로그 확인"
+              fi
+              echo "| ${{ steps.before.outputs.score }} | ${{ steps.loop.outputs.score || steps.before.outputs.score }} | $result |"
+              echo
+              if [ -f "$RUNNER_TEMP/ai-loop/truncated-1.txt" ]; then
+                IFS=/ read -r passed total < "$RUNNER_TEMP/ai-loop/truncated-1.txt"
+                echo "> ⚠️ 남은 변이 ${total}개 중 **${passed}개만** AI에게 넘겼습니다 (살아남은 변이 우선). 나머지는 이번 보강에서 다루지 않았습니다. 라벨을 다시 붙이면 이어서 보강합니다."
+                echo
+              fi
+              # 보강이 정상으로 끝났을 때만 클래스별 전후 비교 (중단됐으면 마지막 측정이 보강 전 상태라 비교 의미 없음)
+              if [ "${{ steps.loop.outputs.exit }}" = "0" ] && [ -f "$RUNNER_TEMP/before.xml" ]; then
+                echo "### 클래스별 보강 전후"
+                echo
+                java scripts/mutation/PitReport.java compare "$RUNNER_TEMP/before.xml" build/reports/pitest/mutations.xml
+                echo
+              fi
+              echo "<details><summary>AI 답변 (추가한 테스트, 이미 검증되던 것, 동등 변이, 실패한 테스트)</summary>"
+              echo
+              for f in "$RUNNER_TEMP"/ai-loop/ai-*.md; do
+                [ -f "$f" ] || continue
+                echo "#### $(basename "$f" .md)"
+                head -c 15000 "$f"
+                echo
+              done
+              echo
+              echo "</details>"
+            fi
+          } > "$out"
+          cat "$out" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        if: always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: mutation-ai
+          path: ${{ runner.temp }}/ai-comment.md
+
+      - name: Remove label
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr edit "$PR_NUMBER" --repo "${{ github.repository }}" --remove-label mutation-fix
+
+      - name: Remove Codex login
+        if: always()
+        run: rm -f ~/.codex/auth.json
+
+      - name: Upload AI loop logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-mutation-ai-logs
+          path: ${{ runner.temp }}/ai-loop/
+          retention-days: 7

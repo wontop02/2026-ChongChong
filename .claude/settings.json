@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(/backend/src/main/**)",
+      "Write(/backend/src/main/**)",
+      "Edit(/backend/scripts/mutation/baseline/**)"
+    ]
+  }
+}

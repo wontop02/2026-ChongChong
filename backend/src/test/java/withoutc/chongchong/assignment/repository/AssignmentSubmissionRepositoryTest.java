@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -36,6 +37,7 @@ import withoutc.chongchong.user.repository.UserRepository;
 @ActiveProfiles("test")
 @Transactional
 @SpringBootTest
+@Tag("integration")
 class AssignmentSubmissionRepositoryTest {
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 8, 20, 9, 0);

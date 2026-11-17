@@ -1,5 +1,6 @@
 package withoutc.chongchong.notification.repository;
 
+import org.junit.jupiter.api.Tag;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -9,5 +10,6 @@ import org.springframework.test.context.ActiveProfiles;
         "spring.flyway.enabled=true",
         "spring.jpa.hibernate.ddl-auto=validate"
 })
+@Tag("integration")
 class NotificationDeliveryRepositoryTest extends NotificationDeliveryRepositoryContractTest {
 }

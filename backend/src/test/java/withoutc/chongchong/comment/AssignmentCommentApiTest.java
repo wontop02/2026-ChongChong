@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -59,6 +60,7 @@ import withoutc.chongchong.user.service.UserService;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "spring.jpa.hibernate.ddl-auto=validate", "spring.flyway.enabled=true"
 })
+@Tag("integration")
 class AssignmentCommentApiTest {
 
     private static final String ASSIGNMENT_PATH = "/studies/%d/assignments/%d/comments";

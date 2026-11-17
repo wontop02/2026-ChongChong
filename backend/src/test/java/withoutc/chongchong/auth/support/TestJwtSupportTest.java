@@ -9,6 +9,7 @@ import static withoutc.chongchong.global.config.ApiPathConfig.API_PREFIX;
 import io.restassured.response.Response;
 import io.restassured.specification.RequestSpecification;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -24,6 +25,7 @@ import withoutc.chongchong.auth.security.AuthenticatedUser;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestJwtSupportTest.TestController.class)
 @ActiveProfiles("test")
+@Tag("integration")
 class TestJwtSupportTest {
 
     private static final String CSRF_COOKIE_NAME = "XSRF-TOKEN";

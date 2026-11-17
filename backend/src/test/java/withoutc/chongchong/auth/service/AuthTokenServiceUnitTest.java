@@ -1,5 +1,6 @@
 package withoutc.chongchong.auth.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -20,6 +21,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 import withoutc.chongchong.auth.config.RefreshTokenProperties;
 import withoutc.chongchong.auth.entity.AuthSession;
 import withoutc.chongchong.auth.exception.AuthErrorCode;
@@ -59,6 +61,26 @@ class AuthTokenServiceUnitTest {
 
     @InjectMocks
     private AuthTokenService authTokenService;
+
+    @Test
+    @DisplayName("만료 시각과 정확히 같은 시점의 재발급은 거부하고 기존 세션을 바꾸지 않는다")
+    void rejectRotationAtExactExpiry() {
+        Instant now = Instant.parse("2026-11-16T12:00:00Z");
+        RawRefreshToken currentToken = new RawRefreshToken("current-refresh-token");
+        HashedRefreshToken currentHash = new HashedRefreshToken("a".repeat(64));
+        User user = User.create("총총이", null);
+        ReflectionTestUtils.setField(user, "id", 7L);
+        AuthSession session = AuthSession.create(user, currentHash, now);
+        when(refreshTokenHasher.hash(currentToken)).thenReturn(currentHash);
+        when(authSessionRepository.findByRefreshTokenHashForUpdate(currentHash)).thenReturn(Optional.of(session));
+        when(clock.instant()).thenReturn(now);
+
+        assertAuthError(() -> authTokenService.rotate(currentToken), AuthErrorCode.INVALID_REFRESH_TOKEN);
+
+        assertThat(session.getRefreshTokenHash()).isEqualTo(currentHash);
+        assertThat(session.getExpiresAt()).isEqualTo(now);
+        verifyNoInteractions(accessTokenIssuer, refreshTokenGenerator);
+    }
 
     @ParameterizedTest
     @NullSource
